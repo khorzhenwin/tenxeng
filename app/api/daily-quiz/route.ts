@@ -17,6 +17,18 @@ const MODEL_NAME = "gemini-3-flash-preview";
 const SIMILARITY_THRESHOLD = 0.85;
 const HISTORY_LIMIT = 200;
 const MAX_RETRIES = 3;
+const DEFAULT_TOPICS = [
+  "Caching",
+  "Load balancing",
+  "Databases",
+  "Data modeling",
+  "Consistency",
+  "Queues",
+  "Observability",
+  "API design",
+  "Security",
+  "Scalability",
+];
 
 const normalizePrompt = (prompt: string) =>
   prompt.trim().toLowerCase().replace(/\s+/g, " ");
@@ -32,6 +44,15 @@ export async function GET() {
   const timezone =
     (userSnap.data()?.timezone as string | undefined) ?? "UTC";
   const dateKey = getDateKeyForTimezone(timezone);
+  const scheduleRef = userRef.collection("topicSchedules").doc(dateKey);
+  const scheduleSnap = await scheduleRef.get();
+  const scheduledTopics = Array.isArray(scheduleSnap.data()?.topics)
+    ? (scheduleSnap.data()?.topics as string[])
+    : [];
+  const defaultTopics = Array.isArray(userSnap.data()?.topicDefaults)
+    ? (userSnap.data()?.topicDefaults as string[])
+    : DEFAULT_TOPICS;
+  const topics = scheduledTopics.length > 0 ? scheduledTopics : defaultTopics;
 
   const quizRef = userRef.collection("dailyQuizzes").doc(dateKey);
   const quizSnap = await quizRef.get();
@@ -57,7 +78,7 @@ export async function GET() {
     historyEntries.map((entry) => String(entry.promptNormalized ?? ""))
   );
 
-  let questions = await generateSystemDesignQuiz(MODEL_NAME);
+  let questions = await generateSystemDesignQuiz(MODEL_NAME, topics);
   let normalizedEmbeddings: number[][] = [];
   let attempt = 0;
 
@@ -76,7 +97,7 @@ export async function GET() {
     }
 
     if (hasExactMatch) {
-      questions = await generateSystemDesignQuiz(MODEL_NAME);
+      questions = await generateSystemDesignQuiz(MODEL_NAME, topics);
       continue;
     }
 
@@ -99,13 +120,14 @@ export async function GET() {
       break;
     }
 
-    questions = await generateSystemDesignQuiz(MODEL_NAME);
+    questions = await generateSystemDesignQuiz(MODEL_NAME, topics);
   }
   const quiz = {
     dateKey,
     timezone,
     model: MODEL_NAME,
     questions,
+    topics,
     generatedAt: new Date().toISOString(),
   };
 

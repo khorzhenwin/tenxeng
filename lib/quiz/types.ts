@@ -12,6 +12,7 @@ export type DailyQuiz = {
   generatedAt: string;
   timezone: string;
   model: string;
+  topics?: string[];
 };
 
 export type QuizResult = {
@@ -20,4 +21,10 @@ export type QuizResult = {
   total: number;
   selectedAnswers: Record<string, number>;
   completedAt: string;
+};
+
+export type TopicSchedule = {
+  dateKey: string;
+  topics: string[];
+  createdAt: string;
 };
