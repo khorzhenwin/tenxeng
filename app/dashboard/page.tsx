@@ -7,16 +7,19 @@ import {
   doc,
   getDocs,
   getDoc,
+  deleteDoc,
   limit,
   orderBy,
   query,
   setDoc,
+  serverTimestamp,
 } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import { firebaseAuth, firestore } from "@/lib/firebase/client";
 import { clearSession } from "@/lib/auth/client";
 import { useAuth } from "@/components/AuthProvider";
 import type { DailyQuiz, QuizResult } from "@/lib/quiz/types";
+import { getDateKeyForTimezone } from "@/lib/quiz/date";
 
 type QuizState = {
   quiz: DailyQuiz | null;
@@ -27,6 +30,19 @@ type QuizState = {
 type HistoryEntry = QuizResult & {
   quiz?: DailyQuiz | null;
 };
+
+const DEFAULT_TOPICS = [
+  "Caching",
+  "Load balancing",
+  "Databases",
+  "Data modeling",
+  "Consistency",
+  "Queues",
+  "Observability",
+  "API design",
+  "Security",
+  "Scalability",
+];
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -42,6 +58,16 @@ export default function DashboardPage() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedDateKey, setExpandedDateKey] = useState<string | null>(null);
+  const [topicDefaults, setTopicDefaults] = useState<string[]>(DEFAULT_TOPICS);
+  const [topicLibrary, setTopicLibrary] = useState<string[]>([]);
+  const [topicInput, setTopicInput] = useState("");
+  const [scheduleMap, setScheduleMap] = useState<Record<string, string[]>>({});
+  const [applyDays, setApplyDays] = useState(3);
+  const [timezone, setTimezone] = useState("UTC");
+  const [isTopicsOpen, setIsTopicsOpen] = useState(true);
+  const [activeTab, setActiveTab] = useState<"questions" | "preferences">(
+    "questions"
+  );
 
   useEffect(() => {
     if (!loading && !user) {
@@ -87,10 +113,32 @@ export default function DashboardPage() {
     setHistory(results);
   };
 
+  const loadUserSettings = async () => {
+    if (!user) return;
+    const userRef = doc(firestore, "users", user.uid);
+    const userSnap = await getDoc(userRef);
+    const data = userSnap.data();
+    const storedTimezone =
+      (data?.timezone as string | undefined) ??
+      Intl.DateTimeFormat().resolvedOptions().timeZone ??
+      "UTC";
+    const storedDefaults = Array.isArray(data?.topicDefaults)
+      ? (data?.topicDefaults as string[])
+      : DEFAULT_TOPICS;
+    const storedLibrary = Array.isArray(data?.topicLibrary)
+      ? (data?.topicLibrary as string[])
+      : [];
+
+    setTimezone(storedTimezone);
+    setTopicDefaults(storedDefaults);
+    setTopicLibrary(storedLibrary);
+  };
+
   useEffect(() => {
     if (user) {
       fetchDailyQuiz();
       fetchHistory();
+      loadUserSettings();
     }
   }, [user]);
 
@@ -120,6 +168,28 @@ export default function DashboardPage() {
   const displayScore =
     submitted ? score : (todaysResult?.score ?? score ?? null);
   const displayTotal = todaysResult?.total ?? totalQuestions;
+  const scheduleDays = useMemo(() => {
+    const baseDate = new Date();
+    if (isCompletedToday) {
+      baseDate.setDate(baseDate.getDate() + 1);
+    }
+    return Array.from({ length: 5 }, (_, index) => {
+      const nextDate = new Date(baseDate);
+      nextDate.setDate(baseDate.getDate() + index);
+      const dateKey = getDateKeyForTimezone(timezone, nextDate);
+      return {
+        dateKey,
+        label: formatDateKey(dateKey),
+      };
+    });
+  }, [timezone, isCompletedToday]);
+  const availableTopics = useMemo(() => {
+    const merged = new Set<string>([
+      ...DEFAULT_TOPICS,
+      ...topicLibrary.map((topic) => topic.trim()).filter(Boolean),
+    ]);
+    return Array.from(merged);
+  }, [topicLibrary]);
 
   const handleSelect = (questionId: string, choiceIndex: number) => {
     setAnswers((prev) => ({ ...prev, [questionId]: choiceIndex }));
@@ -150,12 +220,12 @@ export default function DashboardPage() {
     await fetchHistory();
   };
 
-  const formatDateKey = (dateKey: string) => {
+  function formatDateKey(dateKey: string) {
     const year = dateKey.slice(0, 4);
     const month = dateKey.slice(4, 6);
     const day = dateKey.slice(6, 8);
     return `${day}/${month}/${year}`;
-  };
+  }
 
   const loadHistoryQuiz = async (dateKey: string) => {
     if (!user) return;
@@ -172,6 +242,127 @@ export default function DashboardPage() {
       prev.map((entry) =>
         entry.dateKey === dateKey ? { ...entry, quiz } : entry
       )
+    );
+  };
+
+  useEffect(() => {
+    const loadSchedules = async () => {
+      if (!user || scheduleDays.length === 0) return;
+      const scheduleDocs = await Promise.all(
+        scheduleDays.map((day) =>
+          getDoc(
+            doc(firestore, "users", user.uid, "topicSchedules", day.dateKey)
+          )
+        )
+      );
+      const nextMap: Record<string, string[]> = {};
+      scheduleDocs.forEach((docSnap, index) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (Array.isArray(data?.topics)) {
+            nextMap[scheduleDays[index].dateKey] = data.topics as string[];
+          }
+        }
+      });
+      setScheduleMap(nextMap);
+    };
+
+    loadSchedules();
+  }, [user, scheduleDays]);
+
+  const saveUserTopics = async (updates: Partial<Record<string, unknown>>) => {
+    if (!user) return;
+    const userRef = doc(firestore, "users", user.uid);
+    await setDoc(userRef, updates, { merge: true });
+  };
+
+  const updateSchedule = async (dateKey: string, topics: string[]) => {
+    if (!user) return;
+    const scheduleRef = doc(
+      firestore,
+      "users",
+      user.uid,
+      "topicSchedules",
+      dateKey
+    );
+    if (topics.length === 0) {
+      await deleteDoc(scheduleRef);
+      setScheduleMap((prev) => {
+        const next = { ...prev };
+        delete next[dateKey];
+        return next;
+      });
+      return;
+    }
+
+    await setDoc(
+      scheduleRef,
+      {
+        topics,
+        createdAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    setScheduleMap((prev) => ({ ...prev, [dateKey]: topics }));
+  };
+
+  const toggleTopic = (topics: string[], topic: string) => {
+    if (topics.includes(topic)) {
+      return topics.filter((value) => value !== topic);
+    }
+    return [...topics, topic];
+  };
+
+  const handleDefaultToggle = async (topic: string) => {
+    const next = toggleTopic(topicDefaults, topic);
+    setTopicDefaults(next);
+    await saveUserTopics({ topicDefaults: next });
+  };
+
+  const handleAddTopic = async () => {
+    const nextTopic = topicInput.trim();
+    if (!nextTopic) return;
+    if (availableTopics.includes(nextTopic)) {
+      setTopicInput("");
+      return;
+    }
+    const nextLibrary = [...topicLibrary, nextTopic];
+    setTopicLibrary(nextLibrary);
+    setTopicInput("");
+    await saveUserTopics({ topicLibrary: nextLibrary });
+  };
+
+  const handleRemoveTopic = async (topic: string) => {
+    const nextLibrary = topicLibrary.filter((value) => value !== topic);
+    const nextDefaults = topicDefaults.filter((value) => value !== topic);
+    setTopicLibrary(nextLibrary);
+    setTopicDefaults(nextDefaults);
+    await saveUserTopics({
+      topicLibrary: nextLibrary,
+      topicDefaults: nextDefaults,
+    });
+
+    await Promise.all(
+      Object.entries(scheduleMap).map(([dateKey, topics]) => {
+        const nextTopics = topics.filter((value) => value !== topic);
+        return updateSchedule(dateKey, nextTopics);
+      })
+    );
+  };
+
+  const handleApplyDefaults = async () => {
+    if (!user) return;
+    const daysToApply = scheduleDays.slice(0, applyDays);
+    const defaults = [...topicDefaults];
+    setScheduleMap((prev) => {
+      const next = { ...prev };
+      daysToApply.forEach((day) => {
+        next[day.dateKey] = defaults;
+      });
+      return next;
+    });
+    await Promise.all(
+      daysToApply.map((day) => updateSchedule(day.dateKey, defaults))
     );
   };
 
@@ -202,223 +393,432 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Today&apos;s questions</h2>
-            <button
-              className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-400 dark:hover:text-slate-200"
-              onClick={() => fetchDailyQuiz(true)}
-              type="button"
-              disabled={isRefreshing || quizState.loading || isCompletedToday}
-              aria-busy={isRefreshing || quizState.loading}
-            >
-              {(isRefreshing || quizState.loading) && (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-transparent dark:border-slate-400 dark:border-t-transparent" />
-              )}
-              Refresh
-            </button>
-          </div>
-          {quizState.loading ? (
-            <p className="mt-6 text-sm text-slate-500 dark:text-slate-400">
-              Loading quiz...
-            </p>
-          ) : quizState.error ? (
-            <p className="mt-6 text-sm text-rose-700 dark:text-rose-200">
-              {quizState.error}
-            </p>
-          ) : quizState.quiz ? (
-            <div className="mt-6 space-y-6">
-              {isCompletedToday && todaysResult && !submitted ? (
-                <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-4 text-sm text-emerald-900 dark:text-emerald-100">
-                  <p className="font-medium text-emerald-900 dark:text-emerald-100">
-                    You’ve completed today’s quiz. Here are your results.
-                  </p>
-                  <p className="mt-2 text-emerald-800 dark:text-emerald-200">
-                    Score: {todaysResult.score}/{todaysResult.total}
-                  </p>
+        <div className="mt-8 flex gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] p-1">
+          <button
+            type="button"
+            onClick={() => setActiveTab("questions")}
+            className={`rounded-full px-4 py-2 text-sm font-semibold ${
+              activeTab === "questions"
+                ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
+            }`}
+          >
+            Questions
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("preferences")}
+            className={`rounded-full px-4 py-2 text-sm font-semibold ${
+              activeTab === "preferences"
+                ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
+            }`}
+          >
+            Preferences
+          </button>
+        </div>
+
+        {activeTab === "questions" ? (
+          <>
+            <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-semibold">Today&apos;s questions</h2>
+                <button
+                  className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-400 dark:hover:text-slate-200"
+                  onClick={() => fetchDailyQuiz(true)}
+                  type="button"
+                  disabled={
+                    isRefreshing || quizState.loading || isCompletedToday
+                  }
+                  aria-busy={isRefreshing || quizState.loading}
+                >
+                  {(isRefreshing || quizState.loading) && (
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-transparent dark:border-slate-400 dark:border-t-transparent" />
+                  )}
+                  Refresh
+                </button>
+              </div>
+              {quizState.loading ? (
+                <p className="mt-6 text-sm text-slate-500 dark:text-slate-400">
+                  Loading quiz...
+                </p>
+              ) : quizState.error ? (
+                <p className="mt-6 text-sm text-rose-700 dark:text-rose-200">
+                  {quizState.error}
+                </p>
+              ) : quizState.quiz ? (
+                <div className="mt-6 space-y-6">
+                  {isCompletedToday && todaysResult && !submitted ? (
+                    <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-4 text-sm text-emerald-900 dark:text-emerald-100">
+                      <p className="font-medium text-emerald-900 dark:text-emerald-100">
+                        You’ve completed today’s quiz. Here are your results.
+                      </p>
+                      <p className="mt-2 text-emerald-800 dark:text-emerald-200">
+                        Score: {todaysResult.score}/{todaysResult.total}
+                      </p>
+                    </div>
+                  ) : null}
+                  {quizState.quiz.questions.map((question, index) => (
+                    <div
+                      key={question.id}
+                      className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-5"
+                    >
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        Question {index + 1}
+                      </p>
+                      <p className="mt-2 text-base font-medium text-slate-900 dark:text-slate-100">
+                        {question.prompt}
+                      </p>
+                      <div className="mt-4 grid gap-2">
+                        {question.choices.map((choice, choiceIndex) => {
+                          const isSelected =
+                            displayAnswers[question.id] === choiceIndex;
+                          const isCorrect =
+                            showResults &&
+                            choiceIndex === question.answerIndex;
+                          const isWrong =
+                            showResults &&
+                            isSelected &&
+                            choiceIndex !== question.answerIndex;
+
+                          return (
+                            <button
+                              key={choice}
+                              className={`rounded-xl border px-4 py-2 text-left text-sm ${
+                                isCorrect
+                                  ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200"
+                                  : isWrong
+                                  ? "border-rose-400/60 bg-rose-400/10 text-rose-700 dark:text-rose-200"
+                                  : isSelected
+                                  ? "border-slate-400 bg-[color:var(--surface)] text-slate-900 dark:text-slate-100"
+                                  : "border-[color:var(--border)] bg-[color:var(--surface)] text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                              }`}
+                              onClick={() =>
+                                !showResults &&
+                                handleSelect(question.id, choiceIndex)
+                              }
+                              type="button"
+                            >
+                              {choice}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {showResults ? (
+                        <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">
+                          Explanation: {question.explanation}
+                        </p>
+                      ) : null}
+                    </div>
+                  ))}
+                  <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <p className="text-sm text-slate-500 dark:text-slate-400">
+                        {totalQuestions} questions
+                      </p>
+                      {showResults && displayScore !== null ? (
+                        <p className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                          Score: {displayScore}/{displayTotal}
+                        </p>
+                      ) : null}
+                    </div>
+                    {showResults ? (
+                      <span className="text-sm text-slate-500 dark:text-slate-400">
+                        Results saved
+                      </span>
+                    ) : (
+                      <button
+                        className="rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                        type="button"
+                        onClick={handleSubmit}
+                        disabled={!hasAnsweredAll || submitted}
+                      >
+                        {submitted ? "Submitted" : "Submit answers"}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ) : null}
-              {quizState.quiz.questions.map((question, index) => (
-                <div
-                  key={question.id}
-                  className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-5"
-                >
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
-                    Question {index + 1}
-                  </p>
-                  <p className="mt-2 text-base font-medium text-slate-900 dark:text-slate-100">
-                    {question.prompt}
-                  </p>
-                  <div className="mt-4 grid gap-2">
-                    {question.choices.map((choice, choiceIndex) => {
-                      const isSelected =
-                        displayAnswers[question.id] === choiceIndex;
-                      const isCorrect =
-                        showResults && choiceIndex === question.answerIndex;
-                      const isWrong =
-                        showResults &&
-                        isSelected &&
-                        choiceIndex !== question.answerIndex;
+            </section>
 
-                      return (
+            <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+              <h2 className="text-xl font-semibold">Recent history</h2>
+              {history.length === 0 ? (
+                <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+                  Complete your first quiz to see results here.
+                </p>
+              ) : (
+                <div className="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
+                  {history.map((result) => {
+                    const isExpanded = expandedDateKey === result.dateKey;
+                    return (
+                      <div
+                        key={result.dateKey}
+                        className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)]"
+                      >
                         <button
-                          key={choice}
-                          className={`rounded-xl border px-4 py-2 text-left text-sm ${
-                            isCorrect
-                              ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200"
-                              : isWrong
-                              ? "border-rose-400/60 bg-rose-400/10 text-rose-700 dark:text-rose-200"
-                              : isSelected
-                              ? "border-slate-400 bg-[color:var(--surface)] text-slate-900 dark:text-slate-100"
-                              : "border-[color:var(--border)] bg-[color:var(--surface)] text-slate-700 hover:border-slate-400 dark:text-slate-200"
-                          }`}
-                          onClick={() =>
-                            !showResults &&
-                            handleSelect(question.id, choiceIndex)
-                          }
+                          className="flex w-full items-center justify-between px-4 py-3 text-left"
                           type="button"
+                          onClick={async () => {
+                            const next =
+                              expandedDateKey === result.dateKey
+                                ? null
+                                : result.dateKey;
+                            setExpandedDateKey(next);
+                            if (next) {
+                              await loadHistoryQuiz(next);
+                            }
+                          }}
                         >
-                          {choice}
+                          <span>{formatDateKey(result.dateKey)}</span>
+                          <span className="flex items-center gap-3">
+                            {result.score}/{result.total}
+                            <span className="text-xs text-slate-500 dark:text-slate-500">
+                              {isExpanded ? "Hide" : "View"}
+                            </span>
+                          </span>
                         </button>
-                      );
-                    })}
-                  </div>
-                  {showResults ? (
-                    <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">
-                      Explanation: {question.explanation}
-                    </p>
-                  ) : null}
+                        {isExpanded ? (
+                          <div className="border-t border-[color:var(--border)] px-4 py-4">
+                            {!result.quiz ? (
+                              <p className="text-sm text-slate-500 dark:text-slate-400">
+                                Loading questions...
+                              </p>
+                            ) : (
+                              <div className="space-y-4">
+                                {result.quiz.questions.map(
+                                  (question, index) => {
+                                    const selected =
+                                      result.selectedAnswers[question.id];
+                                    return (
+                                      <div
+                                        key={question.id}
+                                        className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+                                      >
+                                        <p className="text-xs text-slate-500 dark:text-slate-500">
+                                          Question {index + 1}
+                                        </p>
+                                        <p className="mt-2 text-sm text-slate-900 dark:text-slate-100">
+                                          {question.prompt}
+                                        </p>
+                                        <div className="mt-3 grid gap-2 text-sm">
+                                          {question.choices.map(
+                                            (choice, choiceIndex) => {
+                                              const isCorrect =
+                                                choiceIndex ===
+                                                question.answerIndex;
+                                              const isSelected =
+                                                choiceIndex === selected;
+                                              return (
+                                                <div
+                                                  key={`${question.id}-${choiceIndex}`}
+                                                  className={`rounded-xl border px-3 py-2 ${
+                                                    isCorrect
+                                                      ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200"
+                                                      : isSelected
+                                                      ? "border-rose-400/60 bg-rose-400/10 text-rose-700 dark:text-rose-200"
+                                                      : "border-[color:var(--border)] text-slate-600 dark:text-slate-300"
+                                                  }`}
+                                                >
+                                                  {choice}
+                                                </div>
+                                              );
+                                            }
+                                          )}
+                                        </div>
+                                        <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                                          Explanation: {question.explanation}
+                                        </p>
+                                      </div>
+                                    );
+                                  }
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-              <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm text-slate-500 dark:text-slate-400">
-                    {totalQuestions} questions
-                  </p>
-                  {showResults && displayScore !== null ? (
-                    <p className="text-lg font-semibold text-slate-900 dark:text-slate-100">
-                      Score: {displayScore}/{displayTotal}
-                    </p>
-                  ) : null}
-                </div>
-                {showResults ? (
-                  <span className="text-sm text-slate-500 dark:text-slate-400">
-                    Results saved
-                  </span>
-                ) : (
-                  <button
-                    className="rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                    type="button"
-                    onClick={handleSubmit}
-                    disabled={!hasAnsweredAll || submitted}
-                  >
-                    {submitted ? "Submitted" : "Submit answers"}
-                  </button>
-                )}
+              )}
+            </section>
+          </>
+        ) : (
+          <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Focus topics</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Prioritize specific areas for the next five days of questions.
+                </p>
               </div>
             </div>
-          ) : null}
-        </section>
 
-        <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
-          <h2 className="text-xl font-semibold">Recent history</h2>
-          {history.length === 0 ? (
-            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-              Complete your first quiz to see results here.
-            </p>
-          ) : (
-            <div className="mt-4 space-y-3 text-sm text-slate-600 dark:text-slate-300">
-              {history.map((result) => {
-                const isExpanded = expandedDateKey === result.dateKey;
-                return (
-                  <div
-                    key={result.dateKey}
-                    className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)]"
-                  >
-                    <button
-                      className="flex w-full items-center justify-between px-4 py-3 text-left"
-                      type="button"
-                      onClick={async () => {
-                        const next =
-                          expandedDateKey === result.dateKey
-                            ? null
-                            : result.dateKey;
-                        setExpandedDateKey(next);
-                        if (next) {
-                          await loadHistoryQuiz(next);
-                        }
-                      }}
-                    >
-                      <span>{formatDateKey(result.dateKey)}</span>
-                      <span className="flex items-center gap-3">
-                        {result.score}/{result.total}
-                        <span className="text-xs text-slate-500 dark:text-slate-500">
-                          {isExpanded ? "Hide" : "View"}
-                        </span>
-                      </span>
-                    </button>
-                    {isExpanded ? (
-                      <div className="border-t border-[color:var(--border)] px-4 py-4">
-                        {!result.quiz ? (
-                          <p className="text-sm text-slate-500 dark:text-slate-400">
-                            Loading questions...
-                          </p>
-                        ) : (
-                          <div className="space-y-4">
-                            {result.quiz.questions.map((question, index) => {
-                              const selected =
-                                result.selectedAnswers[question.id];
-                              return (
-                                <div
-                                  key={question.id}
-                                  className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
-                                >
-                                  <p className="text-xs text-slate-500 dark:text-slate-500">
-                                    Question {index + 1}
-                                  </p>
-                                  <p className="mt-2 text-sm text-slate-900 dark:text-slate-100">
-                                    {question.prompt}
-                                  </p>
-                                  <div className="mt-3 grid gap-2 text-sm">
-                                    {question.choices.map(
-                                      (choice, choiceIndex) => {
-                                        const isCorrect =
-                                          choiceIndex === question.answerIndex;
-                                        const isSelected =
-                                          choiceIndex === selected;
-                                        return (
-                                          <div
-                                            key={`${question.id}-${choiceIndex}`}
-                                            className={`rounded-xl border px-3 py-2 ${
-                                              isCorrect
-                                                ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200"
-                                                : isSelected
-                                                ? "border-rose-400/60 bg-rose-400/10 text-rose-700 dark:text-rose-200"
-                                                : "border-[color:var(--border)] text-slate-600 dark:text-slate-300"
-                                            }`}
-                                          >
-                                            {choice}
-                                          </div>
-                                        );
-                                      }
-                                    )}
-                                  </div>
-                                  <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
-                                    Explanation: {question.explanation}
-                                  </p>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    ) : null}
+            <div className="mt-6 space-y-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Defaults and schedules
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-1 py-1">
+                    {[1, 2, 3, 4, 5].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setApplyDays(value)}
+                        className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                          applyDays === value
+                            ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                            : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
+                        }`}
+                        aria-pressed={applyDays === value}
+                      >
+                        {value}d
+                      </button>
+                    ))}
                   </div>
-                );
-              })}
+                  <button
+                    className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                    type="button"
+                    onClick={handleApplyDefaults}
+                    disabled={topicDefaults.length === 0}
+                  >
+                    Apply defaults
+                  </button>
+                </div>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Default topics
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {availableTopics.map((topic) => {
+                    const isSelected = topicDefaults.includes(topic);
+                    return (
+                      <button
+                        key={topic}
+                        type="button"
+                        onClick={() => handleDefaultToggle(topic)}
+                        className={`rounded-full border px-3 py-1 text-xs ${
+                          isSelected
+                            ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
+                            : "border-[color:var(--border)] text-slate-600 hover:border-slate-400 dark:text-slate-300"
+                        }`}
+                      >
+                        {topic}
+                      </button>
+                    );
+                  })}
+                </div>
+                {topicDefaults.length === 0 ? (
+                  <p className="mt-2 text-xs text-rose-600 dark:text-rose-200">
+                    Pick at least one default topic to apply schedules.
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Custom topics
+                </p>
+                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <input
+                    className="w-full rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-2 text-sm text-slate-700 focus:border-slate-400 focus:outline-none dark:text-slate-200"
+                    placeholder="Add a topic (e.g., Sharding)"
+                    value={topicInput}
+                    onChange={(event) => setTopicInput(event.target.value)}
+                  />
+                  <button
+                    className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                    type="button"
+                    onClick={handleAddTopic}
+                  >
+                    Add topic
+                  </button>
+                </div>
+                {topicLibrary.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {topicLibrary.map((topic) => (
+                      <button
+                        key={topic}
+                        type="button"
+                        onClick={() => handleRemoveTopic(topic)}
+                        className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-slate-600 hover:border-rose-400 hover:text-rose-600 dark:text-slate-300"
+                        title="Remove topic"
+                      >
+                        {topic} ✕
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                    Add custom topics to personalize your focus areas.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  Next 5 days
+                </p>
+                <div className="mt-3 grid gap-4 lg:grid-cols-2">
+                  {scheduleDays.map((day) => {
+                    const scheduledTopics =
+                      scheduleMap[day.dateKey] ?? topicDefaults;
+                    const usesDefault = !scheduleMap[day.dateKey];
+                    return (
+                      <div
+                        key={day.dateKey}
+                        className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4"
+                      >
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                            {day.label}
+                          </p>
+                          <button
+                            className="text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                            type="button"
+                            onClick={() => updateSchedule(day.dateKey, [])}
+                            disabled={usesDefault}
+                          >
+                            Use defaults
+                          </button>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {availableTopics.map((topic) => {
+                            const isSelected =
+                              scheduledTopics?.includes(topic);
+                            return (
+                              <button
+                                key={`${day.dateKey}-${topic}`}
+                                type="button"
+                                onClick={() =>
+                                  updateSchedule(
+                                    day.dateKey,
+                                    toggleTopic(scheduledTopics ?? [], topic)
+                                  )
+                                }
+                                className={`rounded-full border px-3 py-1 text-xs ${
+                                  isSelected
+                                    ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
+                                    : "border-[color:var(--border)] text-slate-600 hover:border-slate-400 dark:text-slate-300"
+                                }`}
+                              >
+                                {topic}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
             </div>
-          )}
-        </section>
+          </section>
+        )}
+
       </div>
     </div>
   );

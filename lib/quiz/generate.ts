@@ -24,7 +24,10 @@ const SYSTEM_PROMPT = [
   'Return ONLY valid JSON in the shape: {"questions":[{"prompt":"","choices":["","","",""],"answerIndex":0,"explanation":""}]}',
 ].join(" ");
 
-export async function generateSystemDesignQuiz(modelName: string) {
+export async function generateSystemDesignQuiz(
+  modelName: string,
+  topics?: string[]
+) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("Missing GEMINI_API_KEY.");
@@ -39,7 +42,11 @@ export async function generateSystemDesignQuiz(modelName: string) {
     },
   });
 
-  const result = await model.generateContent(SYSTEM_PROMPT);
+  const topicPrompt =
+    topics && topics.length > 0
+      ? `${SYSTEM_PROMPT} Prioritize these topics: ${topics.join(", ")}.`
+      : SYSTEM_PROMPT;
+  const result = await model.generateContent(topicPrompt);
   const raw = result.response.text();
   const parsed = quizSchema.parse(JSON.parse(raw));
 
