@@ -168,3 +168,19 @@ flowchart TD
 
 - Rotate the exposed Gemini API key and store it in `.env.local` and Firebase config.
 - Store timezone on signup for daily boundary handling.
+
+## Embedding-Based Novelty Filter
+
+To reduce repeats, the daily quiz endpoint computes embeddings for each
+question and compares them against the user’s history.
+
+**How it works**
+- Each prompt is embedded with `text-embedding-004`.
+- Vectors are normalized to unit length.
+- Cosine similarity becomes a dot product of the normalized vectors.
+- If any question is too similar (>= 0.85) or an exact match, the quiz is
+  regenerated (up to 3 retries).
+
+**Storage**
+- Per-user history is stored in `users/{uid}/questionHistory`:
+  - `prompt`, `promptNormalized`, `embedding`, `dateKey`, `createdAt`

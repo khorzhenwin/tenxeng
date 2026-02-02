@@ -4,11 +4,22 @@ import { adminDb } from "@/lib/firebase/admin";
 import { getSessionUser } from "@/lib/auth/server";
 import { getDateKeyForTimezone } from "@/lib/quiz/date";
 import { generateSystemDesignQuiz } from "@/lib/quiz/generate";
+import {
+  cosineSimilarity,
+  embedText,
+  normalizeVector,
+} from "@/lib/quiz/embeddings";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MODEL_NAME = "gemini-3-flash-preview";
+const SIMILARITY_THRESHOLD = 0.85;
+const HISTORY_LIMIT = 200;
+const MAX_RETRIES = 3;
+
+const normalizePrompt = (prompt: string) =>
+  prompt.trim().toLowerCase().replace(/\s+/g, " ");
 
 export async function GET() {
   const user = await getSessionUser();
@@ -33,7 +44,63 @@ export async function GET() {
     return NextResponse.json(quizSnap.data());
   }
 
-  const questions = await generateSystemDesignQuiz(MODEL_NAME);
+  const historyRef = userRef
+    .collection("questionHistory")
+    .orderBy("createdAt", "desc")
+    .limit(HISTORY_LIMIT);
+  const historySnap = await historyRef.get();
+  const historyEntries = historySnap.docs.map((doc) => doc.data());
+  const historyEmbeddings = historyEntries
+    .map((entry) => entry.embedding as number[] | undefined)
+    .filter((entry): entry is number[] => Array.isArray(entry));
+  const historyPromptSet = new Set(
+    historyEntries.map((entry) => String(entry.promptNormalized ?? ""))
+  );
+
+  let questions = await generateSystemDesignQuiz(MODEL_NAME);
+  let normalizedEmbeddings: number[][] = [];
+  let attempt = 0;
+
+  while (attempt < MAX_RETRIES) {
+    attempt += 1;
+    const promptSet = new Set<string>();
+    let hasExactMatch = false;
+
+    for (const question of questions) {
+      const normalized = normalizePrompt(question.prompt);
+      if (promptSet.has(normalized) || historyPromptSet.has(normalized)) {
+        hasExactMatch = true;
+        break;
+      }
+      promptSet.add(normalized);
+    }
+
+    if (hasExactMatch) {
+      questions = await generateSystemDesignQuiz(MODEL_NAME);
+      continue;
+    }
+
+    const embeddings = await Promise.all(
+      questions.map((question) => embedText(question.prompt))
+    );
+    normalizedEmbeddings = embeddings.map((embedding) =>
+      normalizeVector(embedding)
+    );
+
+    const isTooSimilar = normalizedEmbeddings.some((embedding) =>
+      historyEmbeddings.some(
+        (historyEmbedding) =>
+          cosineSimilarity(embedding, historyEmbedding) >=
+          SIMILARITY_THRESHOLD
+      )
+    );
+
+    if (!isTooSimilar) {
+      break;
+    }
+
+    questions = await generateSystemDesignQuiz(MODEL_NAME);
+  }
   const quiz = {
     dateKey,
     timezone,
@@ -43,6 +110,20 @@ export async function GET() {
   };
 
   await quizRef.set(quiz);
+  const historyWrites = questions.map((question, index) => {
+    const promptNormalized = normalizePrompt(question.prompt);
+    const embedding = normalizedEmbeddings[index]
+      ? normalizedEmbeddings[index]
+      : undefined;
+    return userRef.collection("questionHistory").add({
+      prompt: question.prompt,
+      promptNormalized,
+      embedding,
+      dateKey,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  });
+  await Promise.all(historyWrites);
   await userRef.set(
     {
       timezone,
