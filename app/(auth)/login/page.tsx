@@ -88,7 +88,14 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-6 py-12 text-slate-100">
+    <div className="relative flex min-h-screen items-center justify-center bg-slate-950 px-6 py-12 text-slate-100">
+      <Link
+        href="/"
+        aria-label="Go to home"
+        className="absolute left-6 top-6 inline-flex h-10 w-10 items-center justify-center rounded-full border border-slate-800 text-slate-200 hover:border-slate-500"
+      >
+        <span className="text-lg">⌂</span>
+      </Link>
       <div className="w-full max-w-md rounded-3xl border border-slate-800 bg-slate-900/70 p-8">
         <div className="space-y-2">
           <h1 className="text-2xl font-semibold">Welcome back</h1>

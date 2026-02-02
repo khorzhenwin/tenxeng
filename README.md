@@ -55,3 +55,116 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Project Plan (verbatim)
+
+---
+name: Next+Firebase Gemini Quiz
+overview: Scaffold a Next.js app with Firebase Auth (email + Google), Firestore-backed daily quizzes, and Gemini-powered question generation with a hybrid batch/on-demand pipeline.
+todos:
+  - id: scaffold-app
+    content: Scaffold Next.js app and Firebase config modules
+    status: completed
+  - id: auth-flows
+    content: Implement Firebase Auth UI + profile storage
+    status: completed
+    dependencies:
+      - scaffold-app
+  - id: quiz-generation
+    content: Build Gemini API route with schema validation
+    status: completed
+    dependencies:
+      - scaffold-app
+  - id: scheduler
+    content: Add Firebase scheduled function for daily precompute
+    status: completed
+    dependencies:
+      - quiz-generation
+  - id: dashboard-ui
+    content: Create dashboard quiz UI + history + scoring
+    status: completed
+    dependencies:
+      - auth-flows
+      - quiz-generation
+  - id: security-rules
+    content: Add Firestore rules and rate limiting
+    status: completed
+    dependencies:
+      - auth-flows
+      - quiz-generation
+---
+
+# Next+Firebase Gemini Quiz
+
+## Scope
+
+- Next.js (App Router, TypeScript) app with Firebase Auth (email/password + Google), protected dashboard, and quiz history.
+- Gemini `gemini-3-flash-preview` generates 5 system-design MCQs per day with explanations.
+- Firestore stores users, daily quizzes, and results; scheduled function precomputes for active users with on-demand fallback.
+
+## Architecture
+
+```mermaid
+flowchart TD
+  user[User] --> webApp[NextApp]
+  webApp -->|auth| firebaseAuth[FirebaseAuth]
+  webApp -->|read/write| firestore[Firestore]
+  webApp -->|requestDailyQuiz| apiRoute[NextApiRoute]
+  apiRoute -->|generateQuestions| gemini[GeminiAPI]
+  scheduler[FirebaseScheduledFunction] -->|precomputeDailyQuizzes| gemini
+  scheduler -->|store| firestore
+```
+
+## Data Model (Firestore)
+
+- `users/{uid}`: profile, timezone, lastActiveAt.
+- `users/{uid}/dailyQuizzes/{yyyyMMdd}`: questions[], answers[], explanations[], generatedAt.
+- `users/{uid}/quizResults/{quizId}`: selectedAnswers, score, completedAt.
+
+## Implementation Steps
+
+1. Scaffold Next.js app with App Router and Firebase client SDK; add env handling and shared config modules.
+
+   - Create `[app]/(auth)/login/page.tsx`, `[app]/(auth)/signup/page.tsx`, `[app]/(dashboard)/page.tsx`.
+   - Add `lib/firebase/client.ts`, `lib/firebase/admin.ts` (server-only), and `middleware.ts` for route protection.
+
+2. Implement Auth UI and flows.
+
+   - Email/password signup/login + Google OAuth.
+   - Save user profile in `users/{uid}` with timezone on first login.
+
+3. Build Gemini generation API route.
+
+   - Add `app/api/daily-quiz/route.ts` to generate/return today’s quiz.
+   - Use strict JSON schema for 5 MCQs; validate and store in Firestore.
+   - Server-only access to `GEMINI_API_KEY` (never in client bundle).
+
+4. Add hybrid scheduling.
+
+   - Create Firebase Functions (scheduled) to precompute quizzes for recently active users.
+   - Fallback to on-demand generation in API route when a quiz is missing.
+
+5. Create dashboard UI.
+
+   - Show today’s quiz, scoring, and history list with per-day results.
+
+6. Security + rules.
+
+   - Firestore security rules for per-user access.
+   - Basic rate limiting (per-user per-day) in API route and function.
+
+## Key Files
+
+- `[app]/app/api/daily-quiz/route.ts`
+- `[app]/lib/firebase/client.ts`
+- `[app]/lib/firebase/admin.ts`
+- `[app]/app/(auth)/login/page.tsx`
+- `[app]/app/(auth)/signup/page.tsx`
+- `[app]/app/(dashboard)/page.tsx`
+- `[app]/functions/src/index.ts` (scheduled function)
+- `[app]/firestore.rules`
+
+## Notes
+
+- Rotate the exposed Gemini API key and store it in `.env.local` and Firebase config.
+- Store timezone on signup for daily boundary handling.
