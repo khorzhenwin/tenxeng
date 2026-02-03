@@ -1,4 +1,14 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "entries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "correct", "order": "DESCENDING" },
+        { "fieldPath": "accuracy", "order": "DESCENDING" },
+        { "fieldPath": "total", "order": "DESCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }
