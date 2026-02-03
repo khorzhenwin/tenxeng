@@ -82,6 +82,7 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<
     "questions" | "preferences" | "leaderboard"
   >("questions");
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [leaderboards, setLeaderboards] = useState<
     Record<string, LeaderboardEntry[]>
   >({});
@@ -237,22 +238,31 @@ export default function DashboardPage() {
 
   const handleSubmit = async () => {
     if (!quizState.quiz || !user) return;
+    setSubmitError(null);
     const quiz = quizState.quiz;
-    const response = await fetch("/api/quiz-result", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        dateKey: quiz.dateKey,
-        selectedAnswers: answers,
-      }),
-    });
-    if (!response.ok) {
-      throw new Error("Unable to submit quiz results.");
+    try {
+      const response = await fetch("/api/quiz-result", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dateKey: quiz.dateKey,
+          selectedAnswers: answers,
+        }),
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Unable to submit quiz results.");
+      }
+      const data = (await response.json()) as { score: number; total: number };
+      setScore(data.score);
+      setSubmitted(true);
+      await fetchDailyQuiz();
+      await fetchHistory();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to submit answers.";
+      setSubmitError(message);
     }
-    const data = (await response.json()) as { score: number; total: number };
-    setScore(data.score);
-    setSubmitted(true);
-    await fetchHistory();
   };
 
   function formatDateKey(dateKey: string) {
@@ -637,6 +647,11 @@ export default function DashboardPage() {
                       {showResults && displayScore !== null ? (
                         <p className="text-lg font-semibold text-slate-900 dark:text-slate-100">
                           Score: {displayScore}/{displayTotal}
+                        </p>
+                      ) : null}
+                      {submitError ? (
+                        <p className="mt-2 text-sm text-rose-700 dark:text-rose-200">
+                          {submitError}
                         </p>
                       ) : null}
                     </div>
