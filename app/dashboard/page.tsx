@@ -27,6 +27,7 @@ import {
   parseDateKeyToDate,
   addDays,
 } from "@/lib/quiz/date";
+import { useUiStore } from "@/lib/store/ui";
 
 type QuizState = {
   quiz: DailyQuiz | null;
@@ -45,6 +46,13 @@ type LeaderboardEntry = {
   correct: number;
   total: number;
   accuracy?: number;
+};
+
+type TopicStat = {
+  topic: string;
+  correct: number;
+  total: number;
+  accuracy: number;
 };
 
 const DEFAULT_TOPICS = [
@@ -79,18 +87,21 @@ export default function DashboardPage() {
   const [topicLibrary, setTopicLibrary] = useState<string[]>([]);
   const [topicInput, setTopicInput] = useState("");
   const [scheduleMap, setScheduleMap] = useState<Record<string, string[]>>({});
-  const [applyDays, setApplyDays] = useState(3);
+  const applyDays = useUiStore((state) => state.applyDays);
+  const setApplyDays = useUiStore((state) => state.setApplyDays);
   const [timezone, setTimezone] = useState("UTC");
-  const [activeTab, setActiveTab] = useState<
-    "questions" | "preferences" | "leaderboard"
-  >("questions");
+  const activeTab = useUiStore((state) => state.activeTab);
+  const setActiveTab = useUiStore((state) => state.setActiveTab);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [leaderboards, setLeaderboards] = useState<
     Record<string, LeaderboardEntry[]>
   >({});
   const [expandedWeek, setExpandedWeek] = useState<string | null>(null);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
-  const [leaderboardLimit, setLeaderboardLimit] = useState(10);
+  const leaderboardLimit = useUiStore((state) => state.leaderboardLimit);
+  const setLeaderboardLimit = useUiStore(
+    (state) => state.setLeaderboardLimit
+  );
   const [leaderboardRefreshWeek, setLeaderboardRefreshWeek] = useState<
     string | null
   >(null);
@@ -98,6 +109,8 @@ export default function DashboardPage() {
   const [leaderboardRequested, setLeaderboardRequested] = useState<
     Record<string, boolean>
   >({});
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [topicStats, setTopicStats] = useState<TopicStat[]>([]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -407,7 +420,7 @@ export default function DashboardPage() {
     if (activeTab !== "leaderboard") return;
     if (
       expandedWeek &&
-      (leaderboards[expandedWeek]?.length ?? 0) === 0 &&
+      (leaderboards[expandedWeek]?.length ?? 0) < leaderboardLimit &&
       !leaderboardRequested[expandedWeek]
     ) {
       setLeaderboardRequested((prev) => ({ ...prev, [expandedWeek]: true }));
@@ -419,7 +432,62 @@ export default function DashboardPage() {
     leaderboards,
     refreshLeaderboardWeek,
     leaderboardRequested,
+    leaderboardLimit,
   ]);
+
+
+  const loadStats = useCallback(async () => {
+    if (!user) return;
+    setStatsLoading(true);
+    const resultsRef = collection(firestore, "users", user.uid, "quizResults");
+    const resultsSnap = await getDocs(
+      query(resultsRef, orderBy("completedAt", "desc"), limit(60))
+    );
+    const results = resultsSnap.docs.map((docSnap) => docSnap.data() as QuizResult);
+
+    const quizDocs = await Promise.all(
+      results.map((result) =>
+        getDoc(doc(firestore, "users", user.uid, "dailyQuizzes", result.dateKey))
+      )
+    );
+
+    const totals = new Map<string, { correct: number; total: number }>();
+    quizDocs.forEach((quizSnap, index) => {
+      if (!quizSnap.exists()) return;
+      const quiz = quizSnap.data() as DailyQuiz;
+      const topics = quiz.topics?.length ? quiz.topics : [];
+      if (topics.length === 0) return;
+      const result = results[index];
+      const totalWeight = quiz.questions.length / topics.length;
+      const correctWeight = result.score / topics.length;
+      topics.forEach((topic) => {
+        const entry = totals.get(topic) ?? { correct: 0, total: 0 };
+        entry.correct += correctWeight;
+        entry.total += totalWeight;
+        totals.set(topic, entry);
+      });
+    });
+
+    const computed = Array.from(totals.entries())
+      .map(([topic, entry]) => ({
+        topic,
+        correct: entry.correct,
+        total: entry.total,
+        accuracy: entry.total > 0 ? entry.correct / entry.total : 0,
+      }))
+      .sort((a, b) => b.accuracy - a.accuracy)
+      .slice(0, 8);
+
+    setTopicStats(computed);
+    setStatsLoading(false);
+  }, [user]);
+
+  useEffect(() => {
+    if (activeTab !== "statistics") return;
+    if (topicStats.length === 0 && !statsLoading) {
+      loadStats();
+    }
+  }, [activeTab, topicStats, statsLoading, loadStats]);
 
   const saveUserTopics = async (updates: Partial<Record<string, unknown>>) => {
     if (!user) return;
@@ -525,14 +593,14 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
-      <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 sm:py-12">
+      <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-12">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-slate-500 dark:text-slate-400">
+          <div className="space-y-2">
+            <p className="text-[11px] uppercase tracking-[0.3em] text-slate-500 dark:text-slate-400 sm:text-sm">
               Daily System Design Quiz
             </p>
-            <div className="mt-2 flex flex-wrap items-center gap-3">
-              <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-100">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100 sm:text-3xl">
                 Welcome back{user?.displayName ? `, ${user.displayName}` : ""}.
               </h1>
               <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-semibold text-slate-600 dark:text-slate-200">
@@ -541,7 +609,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <button
-            className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-slate-400 dark:border-slate-700 dark:text-white dark:hover:border-slate-400"
+            className="w-full rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-slate-400 dark:border-slate-700 dark:text-white dark:hover:border-slate-400 sm:w-auto"
             type="button"
             onClick={handleSignOut}
           >
@@ -549,18 +617,23 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <div className="mt-8 flex w-full flex-wrap items-center gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-1 sm:rounded-full">
+        <div className="mt-6 flex w-full flex-wrap items-center gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-1 sm:mt-8 sm:rounded-full">
           {[
             { id: "questions", label: "Questions" },
             { id: "preferences", label: "Preferences" },
             { id: "leaderboard", label: "Leaderboard" },
+            { id: "statistics", label: "Statistics" },
           ].map((tab) => (
             <button
               key={tab.id}
               type="button"
               onClick={() =>
                 setActiveTab(
-                  tab.id as "questions" | "preferences" | "leaderboard"
+                  tab.id as
+                    | "questions"
+                    | "preferences"
+                    | "leaderboard"
+                    | "statistics"
                 )
               }
               className={`rounded-full px-3 py-2 text-xs font-semibold sm:px-4 sm:text-sm ${
@@ -572,9 +645,6 @@ export default function DashboardPage() {
               {tab.label}
             </button>
           ))}
-          <span className="ml-auto rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-semibold text-slate-600 dark:text-slate-200">
-            {streakCount} day streak
-          </span>
         </div>
 
         {activeTab === "questions" ? (
@@ -830,7 +900,7 @@ export default function DashboardPage() {
                       <button
                         key={value}
                         type="button"
-                        onClick={() => setApplyDays(value)}
+                        onClick={() => setApplyDays(value as 1 | 2 | 3 | 4 | 5)}
                         className={`rounded-full px-3 py-1 text-xs font-semibold ${
                           applyDays === value
                             ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
@@ -981,6 +1051,125 @@ export default function DashboardPage() {
               </div>
             </div>
           </section>
+        ) : activeTab === "statistics" ? (
+          <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Statistics</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Topic strengths based on recent quiz performance.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={loadStats}
+                className="text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {statsLoading ? (
+              <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+                Loading statistics...
+              </p>
+            ) : topicStats.length === 0 ? (
+              <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+                Complete more quizzes to unlock topic statistics.
+              </p>
+            ) : (
+              <div className="mt-6 grid gap-6">
+                <div className="flex items-center justify-center">
+                  <svg
+                    viewBox="0 0 280 280"
+                    className="h-auto w-full max-w-[280px]"
+                  >
+                    <circle
+                      cx="140"
+                      cy="140"
+                      r="110"
+                      fill="none"
+                      stroke="rgba(148,163,184,0.3)"
+                      strokeWidth="1"
+                    />
+                    <circle
+                      cx="140"
+                      cy="140"
+                      r="70"
+                      fill="none"
+                      stroke="rgba(148,163,184,0.3)"
+                      strokeWidth="1"
+                    />
+                    {(() => {
+                      const points = topicStats.map((stat, index) => {
+                        const angle =
+                          (Math.PI * 2 * index) / topicStats.length - Math.PI / 2;
+                        const radius = 110 * Math.max(0.15, stat.accuracy);
+                        const x = 140 + radius * Math.cos(angle);
+                        const y = 140 + radius * Math.sin(angle);
+                        return `${x},${y}`;
+                      });
+                      return (
+                        <polygon
+                          points={points.join(" ")}
+                          fill="rgba(59,130,246,0.2)"
+                          stroke="rgba(59,130,246,0.8)"
+                          strokeWidth="2"
+                        />
+                      );
+                    })()}
+                    {topicStats.map((stat, index) => {
+                      const angle =
+                        (Math.PI * 2 * index) / topicStats.length - Math.PI / 2;
+                      const x = 140 + 120 * Math.cos(angle);
+                      const y = 140 + 120 * Math.sin(angle);
+                      return (
+                        <text
+                          key={stat.topic}
+                          x={x}
+                          y={y}
+                          fill="currentColor"
+                          fontSize="10"
+                          textAnchor="middle"
+                        >
+                          {stat.topic}
+                        </text>
+                      );
+                    })}
+                  </svg>
+                </div>
+                <div className="space-y-3">
+                  {topicStats.map((stat) => {
+                    const strength =
+                      stat.accuracy >= 0.7
+                        ? "Strong"
+                        : stat.accuracy < 0.4
+                        ? "Needs work"
+                        : "Developing";
+                    return (
+                      <div
+                        key={stat.topic}
+                        className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3 text-sm"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-slate-700 dark:text-slate-200">
+                            {stat.topic}
+                          </span>
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            {(stat.accuracy * 100).toFixed(0)}% · {strength}
+                          </span>
+                        </div>
+                        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          {stat.correct.toFixed(1)} correct out of{" "}
+                          {stat.total.toFixed(1)} questions (weighted).
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </section>
         ) : (
             <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1012,7 +1201,7 @@ export default function DashboardPage() {
                       <button
                         key={value}
                         type="button"
-                        onClick={() => setLeaderboardLimit(value)}
+                      onClick={() => setLeaderboardLimit(value as 10 | 25 | 50)}
                         className={`rounded-full px-3 py-1 font-semibold ${
                           leaderboardLimit === value
                             ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
