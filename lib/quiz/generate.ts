@@ -11,6 +11,7 @@ const quizSchema = z.object({
         choices: z.array(z.string().min(1)).length(4),
         answerIndex: z.number().int().min(0).max(3),
         explanation: z.string().min(10),
+        topics: z.array(z.string().min(1)).min(1).max(2).optional(),
       })
     )
     .length(5),
@@ -44,8 +45,10 @@ export async function generateSystemDesignQuiz(
 
   const topicPrompt =
     topics && topics.length > 0
-      ? `${SYSTEM_PROMPT} Prioritize these topics: ${topics.join(", ")}.`
-      : SYSTEM_PROMPT;
+      ? `${SYSTEM_PROMPT} Prioritize these topics: ${topics.join(
+          ", "
+        )}. For each question include 1-2 topics from this list in a "topics" field.`
+      : `${SYSTEM_PROMPT} Include 1-2 topic tags per question in a "topics" field.`;
   const result = await model.generateContent(topicPrompt);
   const raw = result.response.text();
   const parsed = quizSchema.parse(JSON.parse(raw));
@@ -57,6 +60,7 @@ export async function generateSystemDesignQuiz(
       choices: question.choices.map((choice) => choice.trim()),
       answerIndex: question.answerIndex,
       explanation: question.explanation.trim(),
+      topics: question.topics?.map((topic) => topic.trim()),
     })
   );
 }

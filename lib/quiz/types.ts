@@ -4,6 +4,7 @@ export type QuizQuestion = {
   choices: string[];
   answerIndex: number;
   explanation: string;
+  topics?: string[];
 };
 
 export type DailyQuiz = {
