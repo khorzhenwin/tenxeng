@@ -24,6 +24,8 @@ import {
   getMonthWeekStarts,
   getWeekEndDateKey,
   getWeekStartDateKey,
+  parseDateKeyToDate,
+  addDays,
 } from "@/lib/quiz/date";
 
 type QuizState = {
@@ -133,7 +135,7 @@ export default function DashboardPage() {
     if (!user) return;
     const resultsRef = collection(firestore, "users", user.uid, "quizResults");
     const snapshot = await getDocs(
-      query(resultsRef, orderBy("completedAt", "desc"), limit(10))
+      query(resultsRef, orderBy("completedAt", "desc"), limit(30))
     );
     const results = snapshot.docs.map(
       (docItem) => docItem.data() as HistoryEntry
@@ -218,6 +220,28 @@ export default function DashboardPage() {
     ]);
     return Array.from(merged);
   }, [topicLibrary]);
+  const streakCount = useMemo(() => {
+    if (!history.length) return 0;
+    const answeredDates = new Set(history.map((entry) => entry.dateKey));
+    const todayKey = getDateKeyForTimezone(timezone);
+    const yesterdayKey = getDateKeyForTimezone(
+      timezone,
+      addDays(parseDateKeyToDate(todayKey), -1)
+    );
+    const startKey = answeredDates.has(todayKey) ? todayKey : yesterdayKey;
+    if (!answeredDates.has(startKey)) {
+      return 0;
+    }
+    let streak = 0;
+    let cursor = parseDateKeyToDate(startKey);
+    while (true) {
+      const key = getDateKeyForTimezone(timezone, cursor);
+      if (!answeredDates.has(key)) break;
+      streak += 1;
+      cursor = addDays(cursor, -1);
+    }
+    return streak;
+  }, [history, timezone]);
   const monthWeekStarts = useMemo(
     () => getMonthWeekStarts(LEADERBOARD_TIMEZONE),
     []
@@ -508,9 +532,14 @@ export default function DashboardPage() {
             <p className="text-sm uppercase tracking-[0.3em] text-slate-500 dark:text-slate-400">
               Daily System Design Quiz
             </p>
-            <h1 className="mt-2 text-3xl font-semibold text-slate-900 dark:text-slate-100">
-              Welcome back{user?.displayName ? `, ${user.displayName}` : ""}.
-            </h1>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <h1 className="text-3xl font-semibold text-slate-900 dark:text-slate-100">
+                Welcome back{user?.displayName ? `, ${user.displayName}` : ""}.
+              </h1>
+              <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-semibold text-slate-600 dark:text-slate-200">
+                {streakCount} day streak
+              </span>
+            </div>
           </div>
           <button
             className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-slate-400 dark:border-slate-700 dark:text-white dark:hover:border-slate-400"
@@ -521,7 +550,7 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <div className="mt-8 flex w-full flex-wrap gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-1 sm:rounded-full">
+        <div className="mt-8 flex w-full flex-wrap items-center gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-1 sm:rounded-full">
           {[
             { id: "questions", label: "Questions" },
             { id: "preferences", label: "Preferences" },
@@ -544,6 +573,9 @@ export default function DashboardPage() {
               {tab.label}
             </button>
           ))}
+          <span className="ml-auto rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs font-semibold text-slate-600 dark:text-slate-200">
+            {streakCount} day streak
+          </span>
         </div>
 
         {activeTab === "questions" ? (
