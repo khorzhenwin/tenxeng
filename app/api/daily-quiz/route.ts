@@ -138,8 +138,10 @@ export async function GET() {
       ? normalizedEmbeddings[index]
       : undefined;
     return userRef.collection("questionHistory").add({
+      questionId: question.id,
       prompt: question.prompt,
       promptNormalized,
+      topics: question.topics ?? [],
       embedding,
       dateKey,
       createdAt: FieldValue.serverTimestamp(),
