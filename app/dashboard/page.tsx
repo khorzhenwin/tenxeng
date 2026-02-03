@@ -120,6 +120,13 @@ export default function DashboardPage() {
   const backfillRequested = useRef<Set<string>>(new Set());
   const statsInFlight = useRef(false);
   const [backfillLoading, setBackfillLoading] = useState(false);
+  const maskEmail = useCallback((email?: string | null) => {
+    if (!email) return null;
+    if (email.length <= 8) return email;
+    return `${email.slice(0, 4)}${"*".repeat(email.length - 8)}${email.slice(
+      -4
+    )}`;
+  }, []);
   const truncateLabel = useCallback((label: string, max = 15) => {
     if (label.length <= max) return label;
     return `${label.slice(0, Math.max(0, max - 3))}...`;
@@ -1357,14 +1364,19 @@ export default function DashboardPage() {
                                   key={entry.uid}
                                   className="grid gap-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 sm:flex sm:items-center sm:justify-between"
                                 >
+                                  {(() => {
+                                    const maskedEmail = maskEmail(entry.email);
+                                    const displayLabel =
+                                      entry.displayName ||
+                                      maskedEmail ||
+                                      "Anonymous";
+                                    return (
                                   <div className="flex items-center gap-3">
                                     <span className="w-5 text-xs text-slate-400">
                                       {index + 1}
                                     </span>
                                     <span className="grid h-8 w-8 place-items-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] text-xs font-semibold text-slate-600 dark:text-slate-200">
-                                      {(entry.displayName ??
-                                        entry.email ??
-                                        "A")
+                                      {displayLabel
                                         .split(" ")
                                         .filter(Boolean)
                                         .slice(0, 2)
@@ -1374,11 +1386,11 @@ export default function DashboardPage() {
                                         .join("")}
                                     </span>
                                     <span className="font-medium">
-                                      {entry.displayName ||
-                                        entry.email ||
-                                        "Anonymous"}
+                                      {displayLabel}
                                     </span>
                                   </div>
+                                    );
+                                  })()}
                                     <span className="text-sm text-slate-600 dark:text-slate-300 sm:text-base">
                                     {entry.correct}/{entry.total}
                                   </span>
