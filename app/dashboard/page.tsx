@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   collection,
@@ -11,8 +11,12 @@ import {
   limit,
   orderBy,
   query,
+  startAfter,
   setDoc,
   serverTimestamp,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+  type Query,
 } from "firebase/firestore";
 import { signOut } from "firebase/auth";
 import { firebaseAuth, firestore } from "@/lib/firebase/client";
@@ -68,6 +72,8 @@ const DEFAULT_TOPICS = [
   "Scalability",
 ];
 const LEADERBOARD_TIMEZONE = "Asia/Singapore";
+const MAX_STATS_RESULTS = 365;
+const STATS_BATCH_SIZE = 60;
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -111,6 +117,12 @@ export default function DashboardPage() {
   >({});
   const [statsLoading, setStatsLoading] = useState(false);
   const [topicStats, setTopicStats] = useState<TopicStat[]>([]);
+  const backfillRequested = useRef<Set<string>>(new Set());
+  const statsInFlight = useRef(false);
+  const truncateLabel = useCallback((label: string, max = 15) => {
+    if (label.length <= max) return label;
+    return `${label.slice(0, Math.max(0, max - 3))}...`;
+  }, []);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -438,48 +450,114 @@ export default function DashboardPage() {
 
   const loadStats = useCallback(async () => {
     if (!user) return;
+    if (statsInFlight.current) return;
+    statsInFlight.current = true;
     setStatsLoading(true);
-    const resultsRef = collection(firestore, "users", user.uid, "quizResults");
-    const resultsSnap = await getDocs(
-      query(resultsRef, orderBy("completedAt", "desc"), limit(60))
-    );
-    const results = resultsSnap.docs.map((docSnap) => docSnap.data() as QuizResult);
+    try {
+      const resultsRef = collection(
+        firestore,
+        "users",
+        user.uid,
+        "quizResults"
+      );
+      const results: QuizResult[] = [];
+      let lastDoc: QueryDocumentSnapshot<DocumentData> | null = null;
+      while (results.length < MAX_STATS_RESULTS) {
+        const batchLimit = Math.min(
+          STATS_BATCH_SIZE,
+          MAX_STATS_RESULTS - results.length
+        );
+        let batchQuery: Query<DocumentData>;
+        if (lastDoc) {
+          batchQuery = query(
+            resultsRef,
+            orderBy("completedAt", "desc"),
+            startAfter(lastDoc),
+            limit(batchLimit)
+          );
+        } else {
+          batchQuery = query(
+            resultsRef,
+            orderBy("completedAt", "desc"),
+            limit(batchLimit)
+          );
+        }
+        const resultsSnap = await getDocs(batchQuery);
+        results.push(
+          ...resultsSnap.docs.map((docSnap) => docSnap.data() as QuizResult)
+        );
+        if (resultsSnap.docs.length < batchLimit) break;
+        lastDoc = resultsSnap.docs[resultsSnap.docs.length - 1] ?? null;
+      }
 
-    const quizDocs = await Promise.all(
-      results.map((result) =>
-        getDoc(doc(firestore, "users", user.uid, "dailyQuizzes", result.dateKey))
-      )
-    );
+      const quizDocs = await Promise.all(
+        results.map((result) =>
+          getDoc(
+            doc(firestore, "users", user.uid, "dailyQuizzes", result.dateKey)
+          )
+        )
+      );
 
-    const totals = new Map<string, { correct: number; total: number }>();
-    quizDocs.forEach((quizSnap, index) => {
-      if (!quizSnap.exists()) return;
-      const quiz = quizSnap.data() as DailyQuiz;
-      const topics = quiz.topics?.length ? quiz.topics : [];
-      if (topics.length === 0) return;
-      const result = results[index];
-      const totalWeight = quiz.questions.length / topics.length;
-      const correctWeight = result.score / topics.length;
-      topics.forEach((topic) => {
-        const entry = totals.get(topic) ?? { correct: 0, total: 0 };
-        entry.correct += correctWeight;
-        entry.total += totalWeight;
-        totals.set(topic, entry);
+      const totals = new Map<string, { correct: number; total: number }>();
+      const backfillDateKeys: string[] = [];
+      quizDocs.forEach((quizSnap, index) => {
+        if (!quizSnap.exists()) return;
+        const quiz = quizSnap.data() as DailyQuiz;
+        if (!quiz.questions || quiz.questions.length === 0) return;
+        const result = results[index];
+        quiz.questions.forEach((question) => {
+          if (!question.topics || question.topics.length === 0) {
+            backfillDateKeys.push(result.dateKey);
+            return;
+          }
+          const isCorrect =
+            result.selectedAnswers[question.id] === question.answerIndex;
+          question.topics.forEach((topic) => {
+            const entry = totals.get(topic) ?? { correct: 0, total: 0 };
+            entry.correct += isCorrect ? 1 : 0;
+            entry.total += 1;
+            totals.set(topic, entry);
+          });
+        });
       });
-    });
 
-    const computed = Array.from(totals.entries())
-      .map(([topic, entry]) => ({
-        topic,
-        correct: entry.correct,
-        total: entry.total,
-        accuracy: entry.total > 0 ? entry.correct / entry.total : 0,
-      }))
-      .sort((a, b) => b.accuracy - a.accuracy)
-      .slice(0, 8);
+      const computed = Array.from(totals.entries())
+        .map(([topic, entry]) => ({
+          topic,
+          correct: entry.correct,
+          total: entry.total,
+          accuracy: entry.total > 0 ? entry.correct / entry.total : 0,
+        }))
+        .sort((a, b) => b.accuracy - a.accuracy)
+        .slice(0, 8);
 
-    setTopicStats(computed);
-    setStatsLoading(false);
+      setTopicStats(computed);
+      setStatsLoading(false);
+
+      const uniqueBackfills = Array.from(new Set(backfillDateKeys));
+      const pendingBackfills = uniqueBackfills.filter(
+        (dateKey) => !backfillRequested.current.has(dateKey)
+      );
+      if (pendingBackfills.length > 0) {
+        pendingBackfills.forEach((dateKey) =>
+          backfillRequested.current.add(dateKey)
+        );
+        for (let i = 0; i < pendingBackfills.length; i += 30) {
+          const batch = pendingBackfills.slice(i, i + 30);
+          await fetch("/api/quiz-topics/backfill", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dateKeys: batch }),
+          });
+        }
+        setTimeout(() => {
+          loadStats();
+        }, 0);
+      }
+    } finally {
+      statsInFlight.current = false;
+      setStatsLoading(false);
+    }
   }, [user]);
 
   useEffect(() => {
@@ -1123,6 +1201,7 @@ export default function DashboardPage() {
                         (Math.PI * 2 * index) / topicStats.length - Math.PI / 2;
                       const x = 140 + 120 * Math.cos(angle);
                       const y = 140 + 120 * Math.sin(angle);
+                      const label = truncateLabel(stat.topic);
                       return (
                         <text
                           key={stat.topic}
@@ -1132,7 +1211,8 @@ export default function DashboardPage() {
                           fontSize="10"
                           textAnchor="middle"
                         >
-                          {stat.topic}
+                          <title>{stat.topic}</title>
+                          {label}
                         </text>
                       );
                     })}
