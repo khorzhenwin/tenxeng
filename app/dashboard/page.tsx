@@ -119,6 +119,7 @@ export default function DashboardPage() {
   const [topicStats, setTopicStats] = useState<TopicStat[]>([]);
   const backfillRequested = useRef<Set<string>>(new Set());
   const statsInFlight = useRef(false);
+  const [backfillLoading, setBackfillLoading] = useState(false);
   const truncateLabel = useCallback((label: string, max = 15) => {
     if (label.length <= max) return label;
     return `${label.slice(0, Math.max(0, max - 3))}...`;
@@ -539,6 +540,7 @@ export default function DashboardPage() {
         (dateKey) => !backfillRequested.current.has(dateKey)
       );
       if (pendingBackfills.length > 0) {
+        setBackfillLoading(true);
         pendingBackfills.forEach((dateKey) =>
           backfillRequested.current.add(dateKey)
         );
@@ -550,6 +552,7 @@ export default function DashboardPage() {
             body: JSON.stringify({ dateKeys: batch }),
           });
         }
+        setBackfillLoading(false);
         setTimeout(() => {
           loadStats();
         }, 0);
@@ -1147,10 +1150,11 @@ export default function DashboardPage() {
               </button>
             </div>
 
-            {statsLoading ? (
-              <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-                Loading statistics...
-              </p>
+            {statsLoading || backfillLoading ? (
+              <div className="mt-4 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-400/60 border-t-transparent dark:border-slate-500/70" />
+                Updating statistics...
+              </div>
             ) : topicStats.length === 0 ? (
               <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
                 Complete more quizzes to unlock topic statistics.
