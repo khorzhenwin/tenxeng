@@ -280,7 +280,6 @@ export default function DashboardPage() {
       const data = (await response.json()) as { score: number; total: number };
       setScore(data.score);
       setSubmitted(true);
-      await fetchDailyQuiz();
       await fetchHistory();
     } catch (error) {
       const message =
