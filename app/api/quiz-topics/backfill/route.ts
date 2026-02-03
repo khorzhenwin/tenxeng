@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { FieldValue } from "firebase-admin/firestore";
 import { adminDb } from "@/lib/firebase/admin";
 import { getSessionUser } from "@/lib/auth/server";
 
@@ -66,7 +67,11 @@ export async function POST(request: Request) {
       if (!quizSnap.exists) return null;
       const quiz = quizSnap.data() as {
         topics?: string[];
-        questions?: { id: string; prompt: string; topics?: string[] }[];
+        questions?: {
+          id: string;
+          prompt: string;
+          topics?: string[];
+        }[];
       };
       const fallbackTopics = quiz.topics ?? DEFAULT_TOPICS;
       if (!quiz.questions || quiz.questions.length === 0) return null;
@@ -78,36 +83,102 @@ export async function POST(request: Request) {
       const normalizedTopics = Array.from(
         new Set(fallbackTopics.map((topic) => topic.trim()).filter(Boolean))
       );
-      const prompt = [
-        "You are labeling system design questions with topics.",
-        `Allowed topics: ${normalizedTopics.join(", ")}.`,
-        'Return JSON: {"questions":[{"id":"...","topics":["Topic1","Topic2"]}]}',
-        "Pick 1-2 allowed topics per question. Do not invent new topics.",
-        "Questions:",
-        ...quiz.questions.map(
-          (question) => `- (${question.id}) ${question.prompt}`
-        ),
-      ].join("\n");
-
-      const result = await model.generateContent(prompt);
-      const raw = result.response.text();
-      const parsed = topicSchema.parse(JSON.parse(raw));
-      const topicMap = new Map(
-        parsed.questions.map((entry) => [entry.id, entry.topics])
+      const historySnap = await userRef
+        .collection("questionHistory")
+        .where("dateKey", "==", dateKey)
+        .get();
+      const historyEntries = historySnap.docs.map((docSnap) => ({
+        id: docSnap.id,
+        data: docSnap.data() as {
+          questionId?: string;
+          promptNormalized?: string;
+          topics?: string[];
+        },
+      }));
+      const historyByQuestionId = new Map(
+        historyEntries
+          .filter((entry) => entry.data.questionId)
+          .map((entry) => [entry.data.questionId as string, entry])
       );
+      const historyByPrompt = new Map(
+        historyEntries
+          .filter((entry) => entry.data.promptNormalized)
+          .map((entry) => [entry.data.promptNormalized as string, entry])
+      );
+
+      const pendingQuestions = quiz.questions.filter((question) => {
+        if (question.topics && question.topics.length > 0) return false;
+        const historyEntry =
+          historyByQuestionId.get(question.id) ??
+          historyByPrompt.get(
+            question.prompt.trim().toLowerCase().replace(/\s+/g, " ")
+          );
+        return !historyEntry?.data.topics?.length;
+      });
+
+      let topicMap = new Map<string, string[]>();
+      if (pendingQuestions.length > 0) {
+        const prompt = [
+          "You are labeling system design questions with topics.",
+          `Allowed topics: ${normalizedTopics.join(", ")}.`,
+          'Return JSON: {"questions":[{"id":"...","topics":["Topic1","Topic2"]}]}',
+          "Pick 1-2 allowed topics per question. Do not invent new topics.",
+          "Questions:",
+          ...pendingQuestions.map(
+            (question) => `- (${question.id}) ${question.prompt}`
+          ),
+        ].join("\n");
+
+        const result = await model.generateContent(prompt);
+        const raw = result.response.text();
+        const parsed = topicSchema.parse(JSON.parse(raw));
+        topicMap = new Map(
+          parsed.questions.map((entry) => [entry.id, entry.topics])
+        );
+      }
 
       const updatedQuestions = quiz.questions.map((question) => {
         if (question.topics && question.topics.length > 0) {
           return question;
         }
-        const topics = topicMap.get(question.id);
+        const historyEntry =
+          historyByQuestionId.get(question.id) ??
+          historyByPrompt.get(
+            question.prompt.trim().toLowerCase().replace(/\s+/g, " ")
+          );
+        const historyTopics = historyEntry?.data.topics;
+        const topics = historyTopics?.length
+          ? historyTopics
+          : topicMap.get(question.id) ?? normalizedTopics.slice(0, 2);
         return {
           ...question,
-          topics: topics?.length ? topics : normalizedTopics.slice(0, 2),
+          topics,
         };
       });
 
-      await quizRef.set({ questions: updatedQuestions }, { merge: true });
+      const batch = adminDb.batch();
+      batch.set(quizRef, { questions: updatedQuestions }, { merge: true });
+      updatedQuestions.forEach((question) => {
+        const historyEntry =
+          historyByQuestionId.get(question.id) ??
+          historyByPrompt.get(
+            question.prompt.trim().toLowerCase().replace(/\s+/g, " ")
+          );
+        if (historyEntry && question.topics?.length) {
+          const historyRef = userRef
+            .collection("questionHistory")
+            .doc(historyEntry.id);
+          batch.set(
+            historyRef,
+            {
+              topics: question.topics,
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+        }
+      });
+      await batch.commit();
       return dateKey;
     })
   );
