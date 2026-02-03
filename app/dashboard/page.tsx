@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   collection,
@@ -19,7 +19,12 @@ import { firebaseAuth, firestore } from "@/lib/firebase/client";
 import { clearSession } from "@/lib/auth/client";
 import { useAuth } from "@/components/AuthProvider";
 import type { DailyQuiz, QuizResult } from "@/lib/quiz/types";
-import { getDateKeyForTimezone } from "@/lib/quiz/date";
+import {
+  getDateKeyForTimezone,
+  getMonthWeekStarts,
+  getWeekEndDateKey,
+  getWeekStartDateKey,
+} from "@/lib/quiz/date";
 
 type QuizState = {
   quiz: DailyQuiz | null;
@@ -29,6 +34,15 @@ type QuizState = {
 
 type HistoryEntry = QuizResult & {
   quiz?: DailyQuiz | null;
+};
+
+type LeaderboardEntry = {
+  uid: string;
+  displayName: string | null;
+  email?: string | null;
+  correct: number;
+  total: number;
+  accuracy?: number;
 };
 
 const DEFAULT_TOPICS = [
@@ -43,6 +57,7 @@ const DEFAULT_TOPICS = [
   "Security",
   "Scalability",
 ];
+const LEADERBOARD_TIMEZONE = "Asia/Singapore";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -64,10 +79,22 @@ export default function DashboardPage() {
   const [scheduleMap, setScheduleMap] = useState<Record<string, string[]>>({});
   const [applyDays, setApplyDays] = useState(3);
   const [timezone, setTimezone] = useState("UTC");
-  const [isTopicsOpen, setIsTopicsOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<"questions" | "preferences">(
-    "questions"
-  );
+  const [activeTab, setActiveTab] = useState<
+    "questions" | "preferences" | "leaderboard"
+  >("questions");
+  const [leaderboards, setLeaderboards] = useState<
+    Record<string, LeaderboardEntry[]>
+  >({});
+  const [expandedWeek, setExpandedWeek] = useState<string | null>(null);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [leaderboardLimit, setLeaderboardLimit] = useState(10);
+  const [leaderboardRefreshWeek, setLeaderboardRefreshWeek] = useState<
+    string | null
+  >(null);
+  const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
+  const [leaderboardRequested, setLeaderboardRequested] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
     if (!loading && !user) {
@@ -101,7 +128,7 @@ export default function DashboardPage() {
     }
   };
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     if (!user) return;
     const resultsRef = collection(firestore, "users", user.uid, "quizResults");
     const snapshot = await getDocs(
@@ -111,9 +138,9 @@ export default function DashboardPage() {
       (docItem) => docItem.data() as HistoryEntry
     );
     setHistory(results);
-  };
+  }, [user]);
 
-  const loadUserSettings = async () => {
+  const loadUserSettings = useCallback(async () => {
     if (!user) return;
     const userRef = doc(firestore, "users", user.uid);
     const userSnap = await getDoc(userRef);
@@ -132,7 +159,7 @@ export default function DashboardPage() {
     setTimezone(storedTimezone);
     setTopicDefaults(storedDefaults);
     setTopicLibrary(storedLibrary);
-  };
+  }, [user]);
 
   useEffect(() => {
     if (user) {
@@ -140,7 +167,7 @@ export default function DashboardPage() {
       fetchHistory();
       loadUserSettings();
     }
-  }, [user]);
+  }, [user, fetchHistory, loadUserSettings]);
 
   const totalQuestions = quizState.quiz?.questions.length ?? 0;
   const isCompletedToday = useMemo(() => {
@@ -190,6 +217,19 @@ export default function DashboardPage() {
     ]);
     return Array.from(merged);
   }, [topicLibrary]);
+  const monthWeekStarts = useMemo(
+    () => getMonthWeekStarts(LEADERBOARD_TIMEZONE),
+    []
+  );
+  const currentWeekStart = useMemo(
+    () => getWeekStartDateKey(LEADERBOARD_TIMEZONE),
+    []
+  );
+  const visibleWeekStarts = useMemo(
+    () =>
+      monthWeekStarts.filter((weekStart) => weekStart <= currentWeekStart),
+    [monthWeekStarts, currentWeekStart]
+  );
 
   const handleSelect = (questionId: string, choiceIndex: number) => {
     setAnswers((prev) => ({ ...prev, [questionId]: choiceIndex }));
@@ -198,25 +238,20 @@ export default function DashboardPage() {
   const handleSubmit = async () => {
     if (!quizState.quiz || !user) return;
     const quiz = quizState.quiz;
-    const correct = quiz.questions.filter(
-      (question) => answers[question.id] === question.answerIndex
-    ).length;
-    setScore(correct);
+    const response = await fetch("/api/quiz-result", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        dateKey: quiz.dateKey,
+        selectedAnswers: answers,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error("Unable to submit quiz results.");
+    }
+    const data = (await response.json()) as { score: number; total: number };
+    setScore(data.score);
     setSubmitted(true);
-
-    const result: QuizResult = {
-      dateKey: quiz.dateKey,
-      score: correct,
-      total: quiz.questions.length,
-      selectedAnswers: answers,
-      completedAt: new Date().toISOString(),
-    };
-
-    await setDoc(
-      doc(firestore, "users", user.uid, "quizResults", quiz.dateKey),
-      result,
-      { merge: true }
-    );
     await fetchHistory();
   };
 
@@ -269,6 +304,89 @@ export default function DashboardPage() {
 
     loadSchedules();
   }, [user, scheduleDays]);
+
+  useEffect(() => {
+    const loadLeaderboards = async () => {
+      if (
+        !user ||
+        visibleWeekStarts.length === 0 ||
+        activeTab !== "leaderboard"
+      ) {
+        return;
+      }
+      setLeaderboardLoading(true);
+      const entriesByWeek: Record<string, LeaderboardEntry[]> = {};
+
+      await Promise.all(
+        visibleWeekStarts.map(async (weekStart) => {
+          const leaderboardSnap = await getDoc(
+            doc(firestore, "leaderboards", weekStart)
+          );
+          const data = leaderboardSnap.data();
+          const topEntries = Array.isArray(data?.topEntries)
+            ? (data?.topEntries as LeaderboardEntry[])
+            : [];
+          entriesByWeek[weekStart] = topEntries;
+        })
+      );
+
+      setLeaderboards(entriesByWeek);
+      setLeaderboardLoading(false);
+    };
+
+    loadLeaderboards();
+  }, [user, visibleWeekStarts, activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== "leaderboard") return;
+    if (visibleWeekStarts.includes(currentWeekStart)) {
+      setExpandedWeek(currentWeekStart);
+    }
+  }, [activeTab, currentWeekStart, visibleWeekStarts]);
+
+  const refreshLeaderboardWeek = useCallback(
+    async (weekStart: string) => {
+      if (!user) return;
+      setLeaderboardRefreshWeek(weekStart);
+      setLeaderboardError(null);
+      const response = await fetch(`/api/leaderboard?weekStart=${weekStart}`);
+      if (!response.ok) {
+        const message = await response.text();
+        setLeaderboardError(
+          message || "Unable to refresh leaderboard right now."
+        );
+        setLeaderboardRefreshWeek(null);
+        return;
+      }
+      const data = (await response.json()) as {
+        topEntries: LeaderboardEntry[];
+      };
+      setLeaderboards((prev) => ({
+        ...prev,
+        [weekStart]: data.topEntries ?? [],
+      }));
+      setLeaderboardRefreshWeek(null);
+    },
+    [user]
+  );
+
+  useEffect(() => {
+    if (activeTab !== "leaderboard") return;
+    if (
+      expandedWeek &&
+      (leaderboards[expandedWeek]?.length ?? 0) === 0 &&
+      !leaderboardRequested[expandedWeek]
+    ) {
+      setLeaderboardRequested((prev) => ({ ...prev, [expandedWeek]: true }));
+      refreshLeaderboardWeek(expandedWeek);
+    }
+  }, [
+    activeTab,
+    expandedWeek,
+    leaderboards,
+    refreshLeaderboardWeek,
+    leaderboardRequested,
+  ]);
 
   const saveUserTopics = async (updates: Partial<Record<string, unknown>>) => {
     if (!user) return;
@@ -393,34 +511,34 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        <div className="mt-8 flex gap-2 rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] p-1">
-          <button
-            type="button"
-            onClick={() => setActiveTab("questions")}
-            className={`rounded-full px-4 py-2 text-sm font-semibold ${
-              activeTab === "questions"
-                ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
-            }`}
-          >
-            Questions
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("preferences")}
-            className={`rounded-full px-4 py-2 text-sm font-semibold ${
-              activeTab === "preferences"
-                ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
-                : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
-            }`}
-          >
-            Preferences
-          </button>
+        <div className="mt-8 flex w-full flex-wrap gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-1 sm:rounded-full">
+          {[
+            { id: "questions", label: "Questions" },
+            { id: "preferences", label: "Preferences" },
+            { id: "leaderboard", label: "Leaderboard" },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() =>
+                setActiveTab(
+                  tab.id as "questions" | "preferences" | "leaderboard"
+                )
+              }
+              className={`rounded-full px-3 py-2 text-xs font-semibold sm:px-4 sm:text-sm ${
+                activeTab === tab.id
+                  ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                  : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
 
         {activeTab === "questions" ? (
           <>
-            <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+            <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-semibold">Today&apos;s questions</h2>
                 <button
@@ -541,7 +659,7 @@ export default function DashboardPage() {
               ) : null}
             </section>
 
-            <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+            <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
               <h2 className="text-xl font-semibold">Recent history</h2>
               {history.length === 0 ? (
                 <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
@@ -644,8 +762,8 @@ export default function DashboardPage() {
               )}
             </section>
           </>
-        ) : (
-          <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-6 shadow-sm">
+        ) : activeTab === "preferences" ? (
+          <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="text-xl font-semibold">Focus topics</h2>
@@ -816,6 +934,158 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
+          </section>
+        ) : (
+            <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold">Weekly leaderboard</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    You are placed{" "}
+                    {(() => {
+                      const currentEntries =
+                        (expandedWeek
+                          ? leaderboards[expandedWeek]
+                          : leaderboards[currentWeekStart]) ?? [];
+                      const rankIndex = currentEntries.findIndex(
+                        (entry) => entry.uid === user?.uid
+                      );
+                      return rankIndex >= 0
+                        ? `#${rankIndex + 1}`
+                        : "—";
+                    })()}{" "}
+                    this week.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    GMT+8 (Singapore)
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-1 py-1 text-xs">
+                    {[10, 25, 50].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setLeaderboardLimit(value)}
+                        className={`rounded-full px-3 py-1 font-semibold ${
+                          leaderboardLimit === value
+                            ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                            : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
+                        }`}
+                        aria-pressed={leaderboardLimit === value}
+                      >
+                        Top {value}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            {leaderboardLoading ? (
+              <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+                Loading leaderboard...
+              </p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {leaderboardError ? (
+                  <p className="text-sm text-rose-700 dark:text-rose-200">
+                    {leaderboardError}
+                  </p>
+                ) : null}
+                {visibleWeekStarts.map((weekStart) => {
+                  const isOpen = expandedWeek === weekStart;
+                  const entries = leaderboards[weekStart] ?? [];
+                  const limitedEntries = entries.slice(0, leaderboardLimit);
+                  const weekEnd = getWeekEndDateKey(
+                    LEADERBOARD_TIMEZONE,
+                    weekStart
+                  );
+                  return (
+                    <div
+                      key={weekStart}
+                      className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)]"
+                    >
+                        <button
+                          type="button"
+                          className="flex w-full flex-col items-start justify-between gap-2 px-4 py-3 text-left text-xs sm:flex-row sm:items-center sm:gap-4 sm:text-sm"
+                          onClick={() => {
+                            const nextOpen = !isOpen;
+                            setExpandedWeek(nextOpen ? weekStart : null);
+                            if (nextOpen && entries.length === 0) {
+                              refreshLeaderboardWeek(weekStart);
+                            }
+                          }}
+                        >
+                          <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                          Week of {formatDateKey(weekStart)} –{" "}
+                          {formatDateKey(weekEnd)}
+                        </span>
+                        <span className="text-xs text-slate-500 dark:text-slate-400">
+                          {isOpen ? "Hide" : "View"}
+                        </span>
+                      </button>
+                      {isOpen ? (
+                        <div className="border-t border-[color:var(--border)] px-4 py-4">
+                            {limitedEntries.length === 0 ? (
+                            <p className="text-sm text-slate-500 dark:text-slate-400">
+                                {leaderboardRefreshWeek === weekStart
+                                  ? "Loading leaderboard..."
+                                  : "No results yet for this week."}
+                            </p>
+                          ) : (
+                            <div className="space-y-2 text-sm text-slate-700 dark:text-slate-200">
+                              {limitedEntries.map((entry, index) => (
+                                <div
+                                  key={entry.uid}
+                                  className="grid gap-2 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-2 sm:flex sm:items-center sm:justify-between"
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <span className="w-5 text-xs text-slate-400">
+                                      {index + 1}
+                                    </span>
+                                    <span className="grid h-8 w-8 place-items-center rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] text-xs font-semibold text-slate-600 dark:text-slate-200">
+                                      {(entry.displayName ??
+                                        entry.email ??
+                                        "A")
+                                        .split(" ")
+                                        .filter(Boolean)
+                                        .slice(0, 2)
+                                        .map((part) =>
+                                          part[0]?.toUpperCase()
+                                        )
+                                        .join("")}
+                                    </span>
+                                    <span className="font-medium">
+                                      {entry.displayName ||
+                                        entry.email ||
+                                        "Anonymous"}
+                                    </span>
+                                  </div>
+                                    <span className="text-sm text-slate-600 dark:text-slate-300 sm:text-base">
+                                    {entry.correct}/{entry.total}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                            <div className="mt-3 flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => refreshLeaderboardWeek(weekStart)}
+                                className="text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+                                disabled={leaderboardRefreshWeek === weekStart}
+                              >
+                                {leaderboardRefreshWeek === weekStart
+                                  ? "Refreshing..."
+                                  : "Refresh"}
+                              </button>
+                            </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         )}
 
