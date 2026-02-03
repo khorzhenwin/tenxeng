@@ -2,6 +2,16 @@ TenXEng is a Next.js app that delivers daily, AI-generated system design
 questions for backend engineers. It uses Firebase Auth + Firestore and Gemini
 for question generation.
 
+## Features
+
+- Daily AI-generated system design quizzes (5 MCQs with explanations).
+- Email/password + Google authentication with session cookies.
+- Personalized focus topics with per-day schedules (up to 5 days ahead).
+- Embedding-based novelty filter to reduce repeated questions.
+- Weekly leaderboard (GMT+8, Monday start) with rankings and top limits.
+- Streak counter for consecutive days completed.
+- Light/dark theme toggle and mobile-friendly layout.
+
 ## Getting Started
 
 ### Environment setup
@@ -120,6 +130,9 @@ flowchart TD
 - `users/{uid}`: profile, timezone, lastActiveAt.
 - `users/{uid}/dailyQuizzes/{yyyyMMdd}`: questions[], answers[], explanations[], generatedAt.
 - `users/{uid}/quizResults/{quizId}`: selectedAnswers, score, completedAt.
+- `users/{uid}/topicSchedules/{yyyyMMdd}`: topics[], createdAt.
+- `users/{uid}/questionHistory`: prompt history + embeddings for novelty filter.
+- `leaderboards/{weekStart}`: topEntries[], weekEndKey, updatedAt.
 
 ## Implementation Steps
 
@@ -168,6 +181,18 @@ flowchart TD
 
 - Rotate the exposed Gemini API key and store it in `.env.local` and Firebase config.
 - Store timezone on signup for daily boundary handling.
+
+## Focus Topics
+
+Users can set default topics and override per day (up to 5 days ahead). The
+daily quiz prompt is biased toward the scheduled topics and the selected topics
+are stored alongside the quiz for auditability.
+
+## Weekly Leaderboard
+
+- Computed weekly (Monday–Sunday) in GMT+8 (Singapore).
+- Rankings ordered by: correct answers desc → accuracy desc → total desc.
+- Leaderboard shows only weeks in the current month.
 
 ## Embedding-Based Novelty Filter
 
