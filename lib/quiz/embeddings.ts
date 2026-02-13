@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const EMBEDDING_MODEL = "text-embedding-004";
+const DEFAULT_EMBEDDING_MODELS = ["gemini-embedding-001", "text-embedding-004"];
 
 function getClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -12,9 +12,26 @@ function getClient() {
 
 export async function embedText(text: string) {
   const genAI = getClient();
-  const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
-  const result = await model.embedContent(text);
-  return result.embedding.values;
+  const configuredModel = process.env.GEMINI_EMBEDDING_MODEL?.trim();
+  const candidates = configuredModel
+    ? [configuredModel, ...DEFAULT_EMBEDDING_MODELS.filter((m) => m !== configuredModel)]
+    : DEFAULT_EMBEDDING_MODELS;
+
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      const model = genAI.getGenerativeModel({ model: candidate });
+      const result = await model.embedContent(text);
+      return result.embedding.values;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(
+    `Unable to embed content with models: ${candidates.join(", ")}.`,
+    { cause: lastError }
+  );
 }
 
 export function normalizeVector(vector: number[]) {

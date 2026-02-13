@@ -200,7 +200,7 @@ To reduce repeats, the daily quiz endpoint computes embeddings for each
 question and compares them against the user’s history.
 
 **How it works**
-- Each prompt is embedded with `text-embedding-004`.
+- Each prompt is embedded with `gemini-embedding-001` (fallback: `text-embedding-004`).
 - Vectors are normalized to unit length.
 - Cosine similarity becomes a dot product of the normalized vectors.
 - If any question is too similar (>= 0.85) or an exact match, the quiz is
