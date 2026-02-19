@@ -1,12 +1,39 @@
+# TenXEng
+
 TenXEng is a Next.js app that delivers daily, AI-generated system design
 questions for backend engineers. It uses Firebase Auth + Firestore and Gemini
 for question generation.
+
+## Product Screenshots
+
+### Questions (Dark)
+
+![Questions page in dark mode](docs/screenshots/questions-dark.png)
+
+### Preferences (Light)
+
+![Preferences page in light mode](docs/screenshots/preferences-light.png)
+
+### Leaderboard (Dark)
+
+![Leaderboard page in dark mode](docs/screenshots/leaderboard-dark.png)
+
+### Statistics (Light)
+
+![Statistics page in light mode](docs/screenshots/statistics-light.png)
+
+### PvP (Dark)
+
+![PvP page in dark mode](docs/screenshots/pvp-dark.png)
 
 ## Features
 
 - Daily AI-generated system design quizzes (5 MCQs with explanations).
 - Email/password + Google authentication with session cookies.
 - Personalized focus topics with per-day schedules (up to 5 days ahead).
+- PvP mode: create or join a 1v1 session, answer the same 5 questions, and
+  win by score (time is used as tie-breaker).
+- PvP session history with win/loss/draw outcomes and paginated match history.
 - Embedding-based novelty filter to reduce repeated questions.
 - Weekly leaderboard (GMT+8, Monday start) with rankings and top limits.
 - Streak counter for consecutive days completed.
