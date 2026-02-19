@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   collection,
@@ -76,7 +76,7 @@ const LEADERBOARD_TIMEZONE = "Asia/Singapore";
 const MAX_STATS_RESULTS = 365;
 const STATS_BATCH_SIZE = 60;
 
-export default function DashboardPage() {
+function DashboardContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, loading } = useAuth();
@@ -1442,5 +1442,23 @@ export default function DashboardPage() {
 
       </div>
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
+          <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-12">
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Loading dashboard...
+            </p>
+          </div>
+        </div>
+      }
+    >
+      <DashboardContent />
+    </Suspense>
   );
 }
