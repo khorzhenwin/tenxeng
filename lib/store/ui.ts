@@ -1,7 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-type DashboardTab = "questions" | "preferences" | "leaderboard" | "statistics";
+type DashboardTab =
+  | "questions"
+  | "preferences"
+  | "leaderboard"
+  | "statistics"
+  | "pvp";
 
 type UiState = {
   activeTab: DashboardTab;
@@ -24,12 +29,22 @@ export const useUiStore = create<UiState>()(
     }),
     {
       name: "tenxeng-ui",
-      version: 1,
+      version: 2,
       migrate: (state) => {
         const data = state as UiState;
         const allowed = new Set([10, 25, 50]);
+        const allowedTabs = new Set([
+          "questions",
+          "preferences",
+          "leaderboard",
+          "statistics",
+          "pvp",
+        ]);
         return {
           ...data,
+          activeTab: allowedTabs.has(data.activeTab)
+            ? data.activeTab
+            : "questions",
           leaderboardLimit: allowed.has(data.leaderboardLimit)
             ? data.leaderboardLimit
             : 10,

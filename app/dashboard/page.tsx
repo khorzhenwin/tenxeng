@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   collection,
   doc,
@@ -32,6 +32,7 @@ import {
   addDays,
 } from "@/lib/quiz/date";
 import { useUiStore } from "@/lib/store/ui";
+import PvpPanel from "@/components/PvpPanel";
 
 type QuizState = {
   quiz: DailyQuiz | null;
@@ -75,8 +76,9 @@ const LEADERBOARD_TIMEZONE = "Asia/Singapore";
 const MAX_STATS_RESULTS = 365;
 const STATS_BATCH_SIZE = 60;
 
-export default function DashboardPage() {
+function DashboardContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user, loading } = useAuth();
   const [quizState, setQuizState] = useState<QuizState>({
     quiz: null,
@@ -120,6 +122,12 @@ export default function DashboardPage() {
   const backfillRequested = useRef<Set<string>>(new Set());
   const statsInFlight = useRef(false);
   const [backfillLoading, setBackfillLoading] = useState(false);
+  const pvpSessionId = useMemo(() => {
+    const value = searchParams.get("pvpSession");
+    if (!value) return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }, [searchParams]);
   const maskEmail = useCallback((email?: string | null) => {
     if (!email) return null;
     if (email.length <= 8) return email;
@@ -137,6 +145,12 @@ export default function DashboardPage() {
       router.replace("/login");
     }
   }, [loading, user, router]);
+
+  useEffect(() => {
+    if (pvpSessionId) {
+      setActiveTab("pvp");
+    }
+  }, [pvpSessionId, setActiveTab]);
 
   const fetchDailyQuiz = async (manual = false) => {
     if (manual) {
@@ -711,6 +725,7 @@ export default function DashboardPage() {
             { id: "preferences", label: "Preferences" },
             { id: "leaderboard", label: "Leaderboard" },
             { id: "statistics", label: "Statistics" },
+            { id: "pvp", label: "PvP" },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -722,6 +737,7 @@ export default function DashboardPage() {
                     | "preferences"
                     | "leaderboard"
                     | "statistics"
+                    | "pvp"
                 )
               }
               className={`rounded-full px-3 py-2 text-xs font-semibold sm:px-4 sm:text-sm ${
@@ -1261,6 +1277,10 @@ export default function DashboardPage() {
               </div>
             )}
           </section>
+        ) : activeTab === "pvp" ? (
+          user ? (
+            <PvpPanel user={user} initialSessionId={pvpSessionId ?? undefined} />
+          ) : null
         ) : (
             <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1422,5 +1442,23 @@ export default function DashboardPage() {
 
       </div>
     </div>
+  );
+}
+
+export default function DashboardPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
+          <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-12">
+            <p className="text-sm text-slate-500 dark:text-slate-400">
+              Loading dashboard...
+            </p>
+          </div>
+        </div>
+      }
+    >
+      <DashboardContent />
+    </Suspense>
   );
 }
