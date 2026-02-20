@@ -289,6 +289,20 @@ function DashboardContent() {
     }
     return streak;
   }, [history, timezone]);
+  const profileSummary = useMemo(() => {
+    return history.reduce(
+      (acc, entry) => {
+        acc.total += entry.total ?? 0;
+        acc.correct += entry.score ?? 0;
+        return acc;
+      },
+      { total: 0, correct: 0 }
+    );
+  }, [history]);
+  const wrongAnswers = Math.max(0, profileSummary.total - profileSummary.correct);
+  const correctRatio =
+    profileSummary.total > 0 ? profileSummary.correct / profileSummary.total : 0;
+  const wrongRatio = profileSummary.total > 0 ? wrongAnswers / profileSummary.total : 0;
   const monthWeekStarts = useMemo(
     () => getMonthWeekStarts(LEADERBOARD_TIMEZONE),
     []
@@ -585,7 +599,7 @@ function DashboardContent() {
   }, [user]);
 
   useEffect(() => {
-    if (activeTab !== "statistics") return;
+    if (activeTab !== "profile") return;
     if (topicStats.length === 0 && !statsLoading) {
       loadStats();
     }
@@ -710,13 +724,26 @@ function DashboardContent() {
               </span>
             </div>
           </div>
-          <button
-            className="w-full rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-slate-400 dark:border-slate-700 dark:text-white dark:hover:border-slate-400 sm:w-auto"
-            type="button"
-            onClick={handleSignOut}
-          >
-            Sign out
-          </button>
+          <div className="flex w-full gap-2 sm:w-auto">
+            <button
+              type="button"
+              onClick={() => setActiveTab("profile")}
+              className={`w-full rounded-full border px-4 py-2 text-sm font-semibold sm:w-auto ${
+                activeTab === "profile"
+                  ? "border-slate-900 bg-slate-900 text-white dark:border-white dark:bg-white dark:text-slate-900"
+                  : "border-slate-300 text-slate-800 hover:border-slate-400 dark:border-slate-700 dark:text-white dark:hover:border-slate-400"
+              }`}
+            >
+              My Profile
+            </button>
+            <button
+              className="w-full rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-800 hover:border-slate-400 dark:border-slate-700 dark:text-white dark:hover:border-slate-400 sm:w-auto"
+              type="button"
+              onClick={handleSignOut}
+            >
+              Sign out
+            </button>
+          </div>
         </div>
 
         <div className="mt-6 flex w-full flex-wrap items-center gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-1 sm:mt-8 sm:rounded-full">
@@ -724,7 +751,6 @@ function DashboardContent() {
             { id: "questions", label: "Questions" },
             { id: "preferences", label: "Preferences" },
             { id: "leaderboard", label: "Leaderboard" },
-            { id: "statistics", label: "Statistics" },
             { id: "pvp", label: "PvP" },
           ].map((tab) => (
             <button
@@ -736,7 +762,6 @@ function DashboardContent() {
                     | "questions"
                     | "preferences"
                     | "leaderboard"
-                    | "statistics"
                     | "pvp"
                 )
               }
@@ -1155,13 +1180,13 @@ function DashboardContent() {
               </div>
             </div>
           </section>
-        ) : activeTab === "statistics" ? (
+        ) : activeTab === "profile" ? (
           <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="text-xl font-semibold">Statistics</h2>
+                <h2 className="text-xl font-semibold">My profile</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Topic strengths based on recent quiz performance.
+                  Performance summary based on your recent quiz history.
                 </p>
               </div>
               <button
@@ -1171,6 +1196,38 @@ function DashboardContent() {
               >
                 Refresh
               </button>
+            </div>
+            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Total questions answered
+                </p>
+                <p className="mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100">
+                  {profileSummary.total}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3">
+                <p className="text-xs text-emerald-700 dark:text-emerald-200">
+                  Correct answers
+                </p>
+                <p className="mt-2 text-2xl font-semibold text-emerald-700 dark:text-emerald-200">
+                  {profileSummary.correct}
+                </p>
+                <p className="mt-1 text-xs text-emerald-700/80 dark:text-emerald-200/80">
+                  {(correctRatio * 100).toFixed(0)}%
+                </p>
+              </div>
+              <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-3">
+                <p className="text-xs text-rose-700 dark:text-rose-200">
+                  Wrong answers
+                </p>
+                <p className="mt-2 text-2xl font-semibold text-rose-700 dark:text-rose-200">
+                  {wrongAnswers}
+                </p>
+                <p className="mt-1 text-xs text-rose-700/80 dark:text-rose-200/80">
+                  {(wrongRatio * 100).toFixed(0)}%
+                </p>
+              </div>
             </div>
 
             {statsLoading || backfillLoading ? (
