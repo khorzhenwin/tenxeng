@@ -17,6 +17,13 @@ type UiState = {
   setApplyDays: (days: 1 | 2 | 3 | 4 | 5) => void;
 };
 
+type PersistedUiState = Partial<
+  Omit<UiState, "activeTab" | "leaderboardLimit">
+> & {
+  activeTab?: string;
+  leaderboardLimit?: number;
+};
+
 export const useUiStore = create<UiState>()(
   persist(
     (set) => ({
@@ -31,7 +38,7 @@ export const useUiStore = create<UiState>()(
       name: "tenxeng-ui",
       version: 3,
       migrate: (state) => {
-        const data = state as UiState;
+        const data = (state as PersistedUiState | undefined) ?? {};
         const allowed = new Set([10, 25, 50]);
         const allowedTabs = new Set([
           "questions",
@@ -40,15 +47,16 @@ export const useUiStore = create<UiState>()(
           "profile",
           "pvp",
         ]);
-        const migratedTab =
-          data.activeTab === "statistics" ? "profile" : data.activeTab;
+        const activeTab = data.activeTab ?? "questions";
+        const migratedTab = activeTab === "statistics" ? "profile" : activeTab;
+        const leaderboardLimit = data.leaderboardLimit;
         return {
           ...data,
           activeTab: allowedTabs.has(migratedTab)
             ? migratedTab
             : "questions",
-          leaderboardLimit: allowed.has(data.leaderboardLimit)
-            ? data.leaderboardLimit
+          leaderboardLimit: allowed.has(leaderboardLimit ?? NaN)
+            ? (leaderboardLimit as 10 | 25 | 50)
             : 10,
         };
       },
