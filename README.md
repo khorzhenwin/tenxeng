@@ -78,6 +78,26 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Chat Integration Tests
+
+The repository includes Firestore-backed integration tests for the chat flow:
+
+- create direct conversation between friends
+- send message and verify unread count increments
+- mark as read and verify unread resets
+- reject DM creation for non-friends
+
+Run:
+
+```bash
+npm run test:integration
+```
+
+Requirements:
+
+- Java Runtime (required by Firebase Firestore emulator)
+- Node + npm
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

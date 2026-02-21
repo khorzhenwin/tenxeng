@@ -20,6 +20,9 @@ export function consumeRateLimit(
   key: string,
   options?: { windowMs?: number }
 ): { allowed: boolean; retryAfterMs: number } {
+  if (process.env.NODE_ENV === "test") {
+    return { allowed: true, retryAfterMs: 0 };
+  }
   const windowMs = options?.windowMs ?? 1000;
   const now = Date.now();
   const store = getStore();

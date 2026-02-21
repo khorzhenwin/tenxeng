@@ -113,13 +113,20 @@ export default function SocialPanel({ user, onOpenPvpSession }: SocialPanelProps
       return;
     }
     let cancelled = false;
+    const controller = new AbortController();
     const run = async () => {
       setSearchLoading(true);
       try {
         const response = await fetch(
-          `/api/users/search?q=${encodeURIComponent(trimmed)}`
+          `/api/users/search?q=${encodeURIComponent(trimmed)}`,
+          { signal: controller.signal }
         );
         if (!response.ok) {
+          // Keep current results on 429 to avoid flashing "No user found"
+          // while user is still typing.
+          if (response.status === 429) {
+            return;
+          }
           if (!cancelled) {
             setSearchResults([]);
           }
@@ -139,9 +146,11 @@ export default function SocialPanel({ user, onOpenPvpSession }: SocialPanelProps
         }
       }
     };
-    run();
+    const timer = setTimeout(run, 350);
     return () => {
       cancelled = true;
+      controller.abort();
+      clearTimeout(timer);
     };
   }, [searchQuery]);
 
