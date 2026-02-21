@@ -10,6 +10,7 @@ export const dynamic = "force-dynamic";
 const TIMEZONE = "Asia/Singapore";
 const querySchema = z.object({
   weekStart: z.string().regex(/^\d{8}$/),
+  scope: z.enum(["global", "friends"]).optional(),
 });
 
 export async function GET(request: Request) {
@@ -21,6 +22,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const payload = querySchema.parse({
     weekStart: searchParams.get("weekStart") ?? "",
+    scope: searchParams.get("scope") ?? "global",
   });
 
   const weekStartKey = payload.weekStart;
@@ -50,7 +52,7 @@ export async function GET(request: Request) {
     totals.set(uid, entry);
   });
 
-  const sorted = Array.from(totals.entries())
+  let sorted = Array.from(totals.entries())
     .map(([uid, entry]) => ({
       uid,
       correct: entry.correct,
@@ -61,8 +63,23 @@ export async function GET(request: Request) {
       if (b.correct !== a.correct) return b.correct - a.correct;
       if (b.accuracy !== a.accuracy) return b.accuracy - a.accuracy;
       return b.total - a.total;
-    })
-    .slice(0, 50);
+    });
+
+  if (payload.scope === "friends") {
+    const friendshipsSnap = await adminDb
+      .collection("friendships")
+      .where("members", "array-contains", user.uid)
+      .limit(500)
+      .get();
+    const allowedUids = new Set<string>([user.uid]);
+    friendshipsSnap.docs.forEach((docSnap) => {
+      const data = docSnap.data() as { members?: string[] };
+      (data.members ?? []).forEach((uid) => allowedUids.add(uid));
+    });
+    sorted = sorted.filter((entry) => allowedUids.has(entry.uid));
+  }
+
+  sorted = sorted.slice(0, 50);
 
   const userSnaps = await Promise.all(
     sorted.map((entry) => adminDb.collection("users").doc(entry.uid).get())
@@ -93,5 +110,10 @@ export async function GET(request: Request) {
       { merge: true }
     );
 
-  return NextResponse.json({ weekStartKey, weekEndKey, topEntries });
+  return NextResponse.json({
+    weekStartKey,
+    weekEndKey,
+    scope: payload.scope ?? "global",
+    topEntries,
+  });
 }
