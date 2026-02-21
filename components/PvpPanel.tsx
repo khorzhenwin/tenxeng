@@ -28,6 +28,8 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
   const [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [challengeingUid, setChallengeingUid] = useState<string | null>(null);
+  const [challengeNotice, setChallengeNotice] = useState<string | null>(null);
   const timerStartedAt = useRef<number | null>(null);
   const startedRequestedRef = useRef(false);
   const joinedByParamRef = useRef(false);
@@ -339,6 +341,32 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
     }
   };
 
+  const challengeOpponent = async (targetUid: string | null) => {
+    if (!targetUid) return;
+    setChallengeingUid(targetUid);
+    setChallengeNotice(null);
+    try {
+      const response = await fetch("/api/pvp/challenges", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengedUid: targetUid }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || "Unable to send challenge.");
+      }
+      setChallengeNotice("Challenge sent.");
+    } catch (challengeError) {
+      setChallengeNotice(
+        challengeError instanceof Error
+          ? challengeError.message
+          : "Unable to send challenge.",
+      );
+    } finally {
+      setChallengeingUid(null);
+    }
+  };
+
   return (
     <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -585,6 +613,11 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
           </p>
         ) : (
           <div className="mt-3 space-y-2">
+            {challengeNotice ? (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {challengeNotice}
+              </p>
+            ) : null}
             {history.map((entry) => (
               <div
                 key={entry.sessionId}
@@ -629,6 +662,20 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
                     {new Date(entry.completedAt).toLocaleString()}
                   </p>
                 </div>
+                {entry.opponentUid ? (
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      disabled={challengeingUid === entry.opponentUid}
+                      onClick={() => challengeOpponent(entry.opponentUid)}
+                      className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs font-semibold text-slate-600 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-300"
+                    >
+                      {challengeingUid === entry.opponentUid
+                        ? "Sending..."
+                        : "Challenge again"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ))}
             {historyHasMore ? (

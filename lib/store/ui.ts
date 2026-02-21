@@ -6,7 +6,8 @@ type DashboardTab =
   | "preferences"
   | "leaderboard"
   | "profile"
-  | "pvp";
+  | "pvp"
+  | "social";
 
 type UiState = {
   activeTab: DashboardTab;
@@ -36,7 +37,7 @@ export const useUiStore = create<UiState>()(
     }),
     {
       name: "tenxeng-ui",
-      version: 3,
+      version: 4,
       migrate: (state) => {
         const data = (state as PersistedUiState | undefined) ?? {};
         const allowed = new Set([10, 25, 50]);
@@ -46,6 +47,7 @@ export const useUiStore = create<UiState>()(
           "leaderboard",
           "profile",
           "pvp",
+          "social",
         ]);
         const activeTab = data.activeTab ?? "questions";
         const migratedTab = activeTab === "statistics" ? "profile" : activeTab;

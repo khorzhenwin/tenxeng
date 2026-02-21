@@ -1,31 +1,87 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+      allow read, write: if isOwner(userId);
 
       match /dailyQuizzes/{quizId} {
-        allow read: if request.auth != null && request.auth.uid == userId;
+        allow read: if isOwner(userId);
         allow write: if false;
       }
 
       match /topicSchedules/{scheduleId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if isOwner(userId);
       }
 
       match /quizResults/{resultId} {
-        allow read, write: if request.auth != null && request.auth.uid == userId;
+        allow read, write: if isOwner(userId);
+      }
+
+      match /pvpSessionHistory/{entryId} {
+        allow read, write: if isOwner(userId);
       }
     }
 
     match /leaderboards/{weekId} {
-      allow read: if request.auth != null;
+      allow read: if isSignedIn();
       allow write: if false;
 
       match /entries/{entryId} {
-        allow read: if request.auth != null;
+        allow read: if isSignedIn();
         allow write: if false;
       }
+    }
+
+    match /friendRequests/{requestId} {
+      allow read: if isSignedIn() &&
+        (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /friendships/{friendshipId} {
+      allow read: if isSignedIn() && resource.data.members.hasAny([request.auth.uid]);
+      allow write: if false;
+    }
+
+    match /blocks/{blockId} {
+      allow read: if isSignedIn() &&
+        (resource.data.blockerUid == request.auth.uid || resource.data.blockedUid == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /pvpChallenges/{challengeId} {
+      allow read: if isSignedIn() &&
+        (resource.data.challengerUid == request.auth.uid || resource.data.challengedUid == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /pvpSessions/{sessionId} {
+      allow read: if isSignedIn() && resource.data.participantIds.hasAny([request.auth.uid]);
+      allow write: if false;
+    }
+
+    match /conversations/{conversationId} {
+      allow read: if isSignedIn() && resource.data.memberUids.hasAny([request.auth.uid]);
+      allow write: if false;
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() &&
+          get(/databases/$(database)/documents/conversations/$(conversationId)).data.memberUids.hasAny([request.auth.uid]);
+        allow write: if false;
+      }
+    }
+
+    match /conversationMembers/{memberId} {
+      allow read: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false;
     }
   }
 }

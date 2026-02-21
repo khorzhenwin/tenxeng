@@ -33,6 +33,8 @@ import {
 } from "@/lib/quiz/date";
 import { useUiStore } from "@/lib/store/ui";
 import PvpPanel from "@/components/PvpPanel";
+import SocialPanel from "@/components/SocialPanel";
+import ChatBubble from "@/components/ChatBubble";
 
 type QuizState = {
   quiz: DailyQuiz | null;
@@ -113,6 +115,9 @@ function DashboardContent() {
   const [leaderboardRefreshWeek, setLeaderboardRefreshWeek] = useState<
     string | null
   >(null);
+  const [leaderboardScope, setLeaderboardScope] = useState<"global" | "friends">(
+    "global"
+  );
   const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
   const [leaderboardRequested, setLeaderboardRequested] = useState<
     Record<string, boolean>
@@ -128,6 +133,13 @@ function DashboardContent() {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
   }, [searchParams]);
+  const openPvpSession = useCallback(
+    (targetSessionId: string) => {
+      setActiveTab("pvp");
+      router.replace(`/dashboard?pvpSession=${targetSessionId}`);
+    },
+    [router, setActiveTab]
+  );
   const maskEmail = useCallback((email?: string | null) => {
     if (!email) return null;
     if (email.length <= 8) return email;
@@ -218,6 +230,16 @@ function DashboardContent() {
       loadUserSettings();
     }
   }, [user, fetchHistory, loadUserSettings]);
+
+  useEffect(() => {
+    if (!user) return;
+    const ping = () => {
+      fetch("/api/presence/ping", { method: "POST" }).catch(() => undefined);
+    };
+    ping();
+    const interval = setInterval(ping, 30000);
+    return () => clearInterval(interval);
+  }, [user]);
 
   const totalQuestions = quizState.quiz?.questions.length ?? 0;
   const isCompletedToday = useMemo(() => {
@@ -411,25 +433,41 @@ function DashboardContent() {
       setLeaderboardLoading(true);
       const entriesByWeek: Record<string, LeaderboardEntry[]> = {};
 
-      await Promise.all(
-        visibleWeekStarts.map(async (weekStart) => {
-          const leaderboardSnap = await getDoc(
-            doc(firestore, "leaderboards", weekStart)
-          );
-          const data = leaderboardSnap.data();
-          const topEntries = Array.isArray(data?.topEntries)
-            ? (data?.topEntries as LeaderboardEntry[])
-            : [];
-          entriesByWeek[weekStart] = topEntries;
-        })
-      );
+      if (leaderboardScope === "global") {
+        await Promise.all(
+          visibleWeekStarts.map(async (weekStart) => {
+            const leaderboardSnap = await getDoc(
+              doc(firestore, "leaderboards", weekStart)
+            );
+            const data = leaderboardSnap.data();
+            const topEntries = Array.isArray(data?.topEntries)
+              ? (data?.topEntries as LeaderboardEntry[])
+              : [];
+            entriesByWeek[weekStart] = topEntries;
+          })
+        );
+      } else {
+        await Promise.all(
+          visibleWeekStarts.map(async (weekStart) => {
+            const response = await fetch(
+              `/api/leaderboard?weekStart=${weekStart}&scope=friends`
+            );
+            if (!response.ok) {
+              entriesByWeek[weekStart] = [];
+              return;
+            }
+            const data = (await response.json()) as { topEntries: LeaderboardEntry[] };
+            entriesByWeek[weekStart] = data.topEntries ?? [];
+          })
+        );
+      }
 
       setLeaderboards(entriesByWeek);
       setLeaderboardLoading(false);
     };
 
     loadLeaderboards();
-  }, [user, visibleWeekStarts, activeTab]);
+  }, [user, visibleWeekStarts, activeTab, leaderboardScope]);
 
   useEffect(() => {
     if (activeTab !== "leaderboard") return;
@@ -443,7 +481,9 @@ function DashboardContent() {
       if (!user) return;
       setLeaderboardRefreshWeek(weekStart);
       setLeaderboardError(null);
-      const response = await fetch(`/api/leaderboard?weekStart=${weekStart}`);
+      const response = await fetch(
+        `/api/leaderboard?weekStart=${weekStart}&scope=${leaderboardScope}`
+      );
       if (!response.ok) {
         const message = await response.text();
         setLeaderboardError(
@@ -461,7 +501,7 @@ function DashboardContent() {
       }));
       setLeaderboardRefreshWeek(null);
     },
-    [user]
+    [user, leaderboardScope]
   );
 
   useEffect(() => {
@@ -752,6 +792,7 @@ function DashboardContent() {
             { id: "preferences", label: "Preferences" },
             { id: "leaderboard", label: "Leaderboard" },
             { id: "pvp", label: "PvP" },
+            { id: "social", label: "Social" },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -763,6 +804,7 @@ function DashboardContent() {
                     | "preferences"
                     | "leaderboard"
                     | "pvp"
+                    | "social"
                 )
               }
               className={`rounded-full px-3 py-2 text-xs font-semibold sm:px-4 sm:text-sm ${
@@ -1338,6 +1380,8 @@ function DashboardContent() {
           user ? (
             <PvpPanel user={user} initialSessionId={pvpSessionId ?? undefined} />
           ) : null
+        ) : activeTab === "social" ? (
+          user ? <SocialPanel user={user} onOpenPvpSession={openPvpSession} /> : null
         ) : (
             <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1364,6 +1408,23 @@ function DashboardContent() {
                   <span className="text-xs text-slate-500 dark:text-slate-400">
                     GMT+8 (Singapore)
                   </span>
+                  <div className="flex flex-wrap items-center gap-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-1 py-1 text-xs">
+                    {(["global", "friends"] as const).map((scope) => (
+                      <button
+                        key={scope}
+                        type="button"
+                        onClick={() => setLeaderboardScope(scope)}
+                        className={`rounded-full px-3 py-1 font-semibold ${
+                          leaderboardScope === scope
+                            ? "bg-slate-900 text-white dark:bg-white dark:text-slate-900"
+                            : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
+                        }`}
+                        aria-pressed={leaderboardScope === scope}
+                      >
+                        {scope === "global" ? "Global" : "Friends"}
+                      </button>
+                    ))}
+                  </div>
                   <div className="flex flex-wrap items-center gap-1 rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-1 py-1 text-xs">
                     {[10, 25, 50].map((value) => (
                       <button
@@ -1498,6 +1559,7 @@ function DashboardContent() {
         )}
 
       </div>
+      {user ? <ChatBubble user={user} /> : null}
     </div>
   );
 }
