@@ -8,6 +8,15 @@
         { "fieldPath": "accuracy", "order": "DESCENDING" },
         { "fieldPath": "total", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "pvpSessions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "participantIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "completedAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
