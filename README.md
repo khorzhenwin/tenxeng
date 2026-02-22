@@ -76,6 +76,19 @@ This approach is intentionally simple and effective for single-instance UX
 protection. For multi-instance deployments or burst-tolerant quotas, migrate to
 Redis-backed token bucket/sliding-window logic.
 
+### Polling-specific limiter (chat + notifications)
+- Polling endpoints use a **Firestore-backed sliding-window counter**:
+  - `chat_conversations_get`
+  - `chat_messages_get`
+  - `chat_typing_get`
+  - `notifications_get`
+- Policy: **15 requests per 10 seconds** per user-per-endpoint key.
+- Chat/notification frontend polling cadence is **5 seconds**.
+- Internal storage: Firestore collection `__rateLimits` (server-managed via Admin SDK).
+- Client access to `__rateLimits` is denied in `firestore.rules`.
+- `firestore.indexes.json` includes a field override for `__rateLimits.timestamps`
+  to avoid unnecessary indexing of the sliding-window timestamp array.
+
 ## Tech Stack
 
 - Next.js App Router + TypeScript
@@ -117,7 +130,8 @@ Open `http://localhost:3000`.
 
 ## Testing
 
-Integration tests cover chat, friend requests, sync PvP, and async PvP happy paths.
+Integration tests cover chat, friend requests, sync PvP, async PvP happy paths,
+and polling rate-limiter behavior (including `__rateLimits` writes).
 
 Requirements:
 - Java Runtime (for Firestore emulator)

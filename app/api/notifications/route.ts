@@ -1,17 +1,22 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth/server";
 import { adminDb } from "@/lib/firebase/admin";
-import { consumeRateLimit } from "@/lib/server/rate-limit";
+import { consumeSlidingWindowRateLimit } from "@/lib/server/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const POLLING_RATE_LIMIT = { windowMs: 10_000, maxRequests: 15 };
 
 export async function GET() {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const limiter = consumeRateLimit(`${user.uid}:notifications_get`);
+  const limiter = await consumeSlidingWindowRateLimit(
+    `${user.uid}:notifications_get`,
+    POLLING_RATE_LIMIT
+  );
   if (!limiter.allowed) {
     return NextResponse.json(
       { error: "Too many requests. Please slow down." },

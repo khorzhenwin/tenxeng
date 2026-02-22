@@ -198,7 +198,7 @@ export default function ChatBubble({ user }: ChatBubbleProps) {
           .catch(() => undefined);
       }
       loadNotifications().catch(() => undefined);
-    }, 4000);
+    }, 5000);
     return () => clearInterval(poller);
   }, [loadConversations, loadMessages, open, selectedConversationId, loadNotifications]);
 
