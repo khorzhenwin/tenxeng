@@ -77,6 +77,15 @@
         { "fieldPath": "uid", "order": "ASCENDING" },
         { "fieldPath": "readAt", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "asyncPvpMatches",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "participantIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

@@ -30,9 +30,14 @@ type SearchResponse = {
 type SocialPanelProps = {
   user: User;
   onOpenPvpSession: (sessionId: string) => void;
+  onOpenAsyncMatch: (matchId: string) => void;
 };
 
-export default function SocialPanel({ user, onOpenPvpSession }: SocialPanelProps) {
+export default function SocialPanel({
+  user,
+  onOpenPvpSession,
+  onOpenAsyncMatch,
+}: SocialPanelProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -42,6 +47,7 @@ export default function SocialPanel({ user, onOpenPvpSession }: SocialPanelProps
   const [blocks, setBlocks] = useState<UserBlock[]>([]);
   const [incomingChallenges, setIncomingChallenges] = useState<PvpChallenge[]>([]);
   const [outgoingChallenges, setOutgoingChallenges] = useState<PvpChallenge[]>([]);
+  const [challengeMode, setChallengeMode] = useState<"sync" | "async">("async");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<FriendListItem[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -213,13 +219,17 @@ export default function SocialPanel({ user, onOpenPvpSession }: SocialPanelProps
       const response = await fetch("/api/pvp/challenges", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ challengedUid })
+        body: JSON.stringify({ challengedUid, mode: challengeMode })
       });
       if (!response.ok) {
         const text = await response.text();
         throw new Error(text || "Unable to send challenge.");
       }
-      setNotice("Challenge sent.");
+      setNotice(
+        challengeMode === "async"
+          ? "Async challenge sent."
+          : "Live challenge sent."
+      );
     });
   };
 
@@ -336,6 +346,28 @@ export default function SocialPanel({ user, onOpenPvpSession }: SocialPanelProps
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4 lg:col-span-2">
+          <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+            Challenge mode
+          </p>
+          <div className="mt-2 flex gap-2">
+            {(["async", "sync"] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setChallengeMode(mode)}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold ${
+                  challengeMode === mode
+                    ? "border-slate-900 bg-slate-900 text-white dark:border-white dark:bg-white dark:text-slate-900"
+                    : "border-[color:var(--border)] text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                }`}
+                aria-pressed={challengeMode === mode}
+              >
+                {mode === "async" ? "Async (recommended)" : "Live (sync)"}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
           <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
             Friend requests ({incomingRequests.length})
@@ -418,6 +450,9 @@ export default function SocialPanel({ user, onOpenPvpSession }: SocialPanelProps
                   <p className="font-medium text-slate-800 dark:text-slate-100">
                     {entry.challengerDisplayName ?? entry.challengerUid}
                   </p>
+                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                    Mode: {(entry.mode ?? "async") === "async" ? "async" : "live"}
+                  </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <button
                       type="button"
@@ -433,9 +468,14 @@ export default function SocialPanel({ user, onOpenPvpSession }: SocialPanelProps
                             throw new Error(text || "Unable to accept challenge.");
                           }
                           const payload = (await response.json()) as {
-                            sessionId: string;
+                            sessionId?: string;
+                            asyncMatchId?: string;
                           };
-                          onOpenPvpSession(payload.sessionId);
+                          if (payload.sessionId) {
+                            onOpenPvpSession(payload.sessionId);
+                          } else if (payload.asyncMatchId) {
+                            onOpenAsyncMatch(payload.asyncMatchId);
+                          }
                         })
                       }
                       className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"

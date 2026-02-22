@@ -133,10 +133,23 @@ function DashboardContent() {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
   }, [searchParams]);
+  const asyncMatchId = useMemo(() => {
+    const value = searchParams.get("asyncMatch");
+    if (!value) return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }, [searchParams]);
   const openPvpSession = useCallback(
     (targetSessionId: string) => {
       setActiveTab("pvp");
       router.replace(`/dashboard?pvpSession=${targetSessionId}`);
+    },
+    [router, setActiveTab]
+  );
+  const openAsyncMatch = useCallback(
+    (targetMatchId: string) => {
+      setActiveTab("pvp");
+      router.replace(`/dashboard?asyncMatch=${targetMatchId}`);
     },
     [router, setActiveTab]
   );
@@ -159,10 +172,10 @@ function DashboardContent() {
   }, [loading, user, router]);
 
   useEffect(() => {
-    if (pvpSessionId) {
+    if (pvpSessionId || asyncMatchId) {
       setActiveTab("pvp");
     }
-  }, [pvpSessionId, setActiveTab]);
+  }, [asyncMatchId, pvpSessionId, setActiveTab]);
 
   const fetchDailyQuiz = async (manual = false) => {
     if (manual) {
@@ -1378,10 +1391,20 @@ function DashboardContent() {
           </section>
         ) : activeTab === "pvp" ? (
           user ? (
-            <PvpPanel user={user} initialSessionId={pvpSessionId ?? undefined} />
+            <PvpPanel
+              user={user}
+              initialSessionId={pvpSessionId ?? undefined}
+              initialAsyncMatchId={asyncMatchId ?? undefined}
+            />
           ) : null
         ) : activeTab === "social" ? (
-          user ? <SocialPanel user={user} onOpenPvpSession={openPvpSession} /> : null
+          user ? (
+            <SocialPanel
+              user={user}
+              onOpenPvpSession={openPvpSession}
+              onOpenAsyncMatch={openAsyncMatch}
+            />
+          ) : null
         ) : (
             <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

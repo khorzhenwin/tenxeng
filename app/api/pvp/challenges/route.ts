@@ -15,7 +15,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const createChallengeSchema = z.object({
-  challengedUid: z.string().min(1)
+  challengedUid: z.string().min(1),
+  mode: z.enum(["sync", "async"]).optional().default("async")
 });
 
 export async function POST(request: Request) {
@@ -92,12 +93,14 @@ export async function POST(request: Request) {
     challengedUid,
     challengerDisplayName: challengerIdentity.displayName,
     challengedDisplayName: challengedIdentity.displayName,
+    mode: payload.mode ?? "async",
     status: "pending",
     createdAt: now,
     updatedAt: now,
     respondedAt: null,
     expiresAt,
-    pvpSessionId: null
+    pvpSessionId: null,
+    asyncMatchId: null
   };
   await challengeRef.set(challenge);
   await createSocialNotification({
