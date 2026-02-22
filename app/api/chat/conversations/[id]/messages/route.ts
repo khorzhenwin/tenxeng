@@ -3,12 +3,17 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSessionUser } from "@/lib/auth/server";
 import { adminDb } from "@/lib/firebase/admin";
-import { consumeRateLimit } from "@/lib/server/rate-limit";
+import {
+  consumeRateLimit,
+  consumeSlidingWindowRateLimit
+} from "@/lib/server/rate-limit";
 import type { Conversation, ConversationMessage } from "@/lib/social/types";
 import { createSocialNotification } from "@/lib/social/notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const POLLING_RATE_LIMIT = { windowMs: 10_000, maxRequests: 15 };
 
 const postMessageSchema = z.object({
   body: z.string().trim().min(1).max(1200)
@@ -23,7 +28,10 @@ export async function GET(request: Request, context: RouteContext) {
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const limiter = consumeRateLimit(`${user.uid}:chat_messages_get`);
+  const limiter = await consumeSlidingWindowRateLimit(
+    `${user.uid}:chat_messages_get`,
+    POLLING_RATE_LIMIT
+  );
   if (!limiter.allowed) {
     return NextResponse.json(
       { error: "Too many requests. Please slow down." },

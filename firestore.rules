@@ -89,6 +89,12 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Internal server-side rate-limit store (written by Admin SDK only).
+    match /__rateLimits/{rateLimitId} {
+      allow read: if false;
+      allow write: if false;
+    }
+
     match /asyncPvpMatches/{matchId} {
       allow read: if isSignedIn() && resource.data.participantIds.hasAny([request.auth.uid]);
       allow write: if false;

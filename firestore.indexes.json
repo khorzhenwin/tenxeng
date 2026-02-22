@@ -101,6 +101,12 @@
         { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" },
         { "arrayConfig": "CONTAINS", "queryScope": "COLLECTION_GROUP" }
       ]
+    },
+    {
+      "collectionGroup": "__rateLimits",
+      "fieldPath": "timestamps",
+      "ttl": false,
+      "indexes": []
     }
   ]
 }
