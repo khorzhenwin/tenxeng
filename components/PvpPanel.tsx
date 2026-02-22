@@ -2,16 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "firebase/auth";
-import type { PvpSession, PvpSessionHistoryEntry } from "@/lib/pvp/types";
+import type {
+  AsyncPvpInboxEntry,
+  AsyncPvpMatch,
+  PvpSession,
+  PvpSessionHistoryEntry,
+} from "@/lib/pvp/types";
 
 type PvpPanelProps = {
   user: User;
   initialSessionId?: string;
+  initialAsyncMatchId?: string;
 };
 
-const HISTORY_PAGE_SIZE = 20;
-
-export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
+export default function PvpPanel({
+  user,
+  initialSessionId,
+  initialAsyncMatchId,
+}: PvpPanelProps) {
   const [sessionIdInput, setSessionIdInput] = useState(initialSessionId ?? "");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [session, setSession] = useState<PvpSession | null>(null);
@@ -24,15 +32,19 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
   const [copied, setCopied] = useState(false);
   const [history, setHistory] = useState<PvpSessionHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
-  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
-  const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [challengeingUid, setChallengeingUid] = useState<string | null>(null);
-  const [challengeNotice, setChallengeNotice] = useState<string | null>(null);
+  const [asyncMatches, setAsyncMatches] = useState<AsyncPvpInboxEntry[]>([]);
+  const [asyncMatchId, setAsyncMatchId] = useState<string | null>(null);
+  const [asyncMatch, setAsyncMatch] = useState<AsyncPvpMatch | null>(null);
+  const [asyncAnswers, setAsyncAnswers] = useState<Record<string, number>>({});
+  const [asyncTimerSeconds, setAsyncTimerSeconds] = useState(0);
+  const [asyncLoading, setAsyncLoading] = useState(false);
+  const [asyncStarting, setAsyncStarting] = useState(false);
+  const [asyncSubmitting, setAsyncSubmitting] = useState(false);
+  const [asyncError, setAsyncError] = useState<string | null>(null);
+  const asyncTimerStartedAt = useRef<number | null>(null);
   const timerStartedAt = useRef<number | null>(null);
   const startedRequestedRef = useRef(false);
-  const joinedByParamRef = useRef(false);
 
   const myPlayer = session?.players[user.uid] ?? null;
   const opponentUid =
@@ -42,6 +54,12 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
   const opponent = opponentUid ? session?.players[opponentUid] : null;
   const hasSubmitted = Boolean(myPlayer?.submittedAt);
   const showModal = hasSubmitted;
+  const asyncMyPlayer = asyncMatch?.players[user.uid] ?? null;
+  const asyncOpponentUid =
+    asyncMatch?.participantIds.find((participantId) => participantId !== user.uid) ??
+    null;
+  const asyncOpponent = asyncOpponentUid ? asyncMatch?.players[asyncOpponentUid] : null;
+  const asyncHasSubmitted = Boolean(asyncMyPlayer?.submittedAt);
 
   const totalQuestions = session?.questions.length ?? 0;
   const hasAnsweredAll = useMemo(() => {
@@ -50,6 +68,13 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
       Object.prototype.hasOwnProperty.call(answers, question.id),
     );
   }, [answers, session]);
+  const asyncTotalQuestions = asyncMatch?.questions.length ?? 0;
+  const asyncHasAnsweredAll = useMemo(() => {
+    if (!asyncMatch || asyncMatch.questions.length === 0) return false;
+    return asyncMatch.questions.every((question) =>
+      Object.prototype.hasOwnProperty.call(asyncAnswers, question.id)
+    );
+  }, [asyncAnswers, asyncMatch]);
 
   const fetchSession = useCallback(async (targetSessionId: string) => {
     const response = await fetch(`/api/pvp/session/${targetSessionId}`);
@@ -61,69 +86,68 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
     setSession(data.session);
     return data.session;
   }, []);
+  const fetchAsyncInbox = useCallback(async () => {
+    const response = await fetch("/api/pvp/async/inbox");
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || "Unable to load async matches.");
+    }
+    const data = (await response.json()) as { matches: AsyncPvpInboxEntry[] };
+    setAsyncMatches(data.matches ?? []);
+    return data.matches ?? [];
+  }, []);
 
-  const fetchHistory = useCallback(
-    async ({
-      reset = false,
-      cursor,
-    }: { reset?: boolean; cursor?: string | null } = {}) => {
-      const targetCursor = reset ? null : (cursor ?? null);
-      if (reset) {
-        setHistoryLoading(true);
-        setHistoryError(null);
-      } else {
-        setHistoryLoadingMore(true);
+  const fetchAsyncMatch = useCallback(async (targetMatchId: string) => {
+    const response = await fetch(`/api/pvp/async/${targetMatchId}`);
+    if (!response.ok) {
+      const message = await response.text();
+      throw new Error(message || "Unable to fetch async match.");
+    }
+    const data = (await response.json()) as { match: AsyncPvpMatch };
+    setAsyncMatch(data.match);
+    setAsyncMatchId(data.match.id);
+    const persistedAnswers = data.match.players[user.uid]?.selectedAnswers ?? {};
+    setAsyncAnswers(persistedAnswers);
+    const startedAt = data.match.players[user.uid]?.startedAt;
+    if (startedAt) {
+      asyncTimerStartedAt.current = Date.parse(startedAt);
+      const elapsed = Math.max(
+        0,
+        Math.floor((Date.now() - asyncTimerStartedAt.current) / 1000)
+      );
+      setAsyncTimerSeconds(elapsed);
+    } else {
+      asyncTimerStartedAt.current = null;
+      setAsyncTimerSeconds(0);
+    }
+    return data.match;
+  }, [user.uid]);
+
+  const fetchHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      const response = await fetch("/api/pvp/history");
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(payload?.error ?? "Unable to load PvP history.");
       }
-      try {
-        const query = new URLSearchParams({
-          pageSize: String(HISTORY_PAGE_SIZE),
-        });
-        if (targetCursor) {
-          query.set("cursor", targetCursor);
-        }
-        const response = await fetch(`/api/pvp/history?${query.toString()}`);
-        if (!response.ok) {
-          const payload = (await response.json().catch(() => null)) as {
-            error?: string;
-            code?: string;
-          } | null;
-          if (payload?.code === "INDEX_NOT_READY") {
-            throw new Error(
-              payload.error ??
-                "PvP history index is still building. Please try again shortly.",
-            );
-          }
-          throw new Error(payload?.error ?? "Unable to load PvP history.");
-        }
-        const data = (await response.json()) as {
-          history: PvpSessionHistoryEntry[];
-          nextCursor: string | null;
-          hasMore: boolean;
-        };
-        setHistory((prev) => {
-          if (reset) {
-            return data.history ?? [];
-          }
-          const merged = [...prev, ...(data.history ?? [])];
-          const deduped = new Map<string, PvpSessionHistoryEntry>();
-          merged.forEach((item) => deduped.set(item.sessionId, item));
-          return Array.from(deduped.values());
-        });
-        setHistoryCursor(data.nextCursor ?? null);
-        setHistoryHasMore(Boolean(data.hasMore));
-      } catch (historyLoadError) {
-        const message =
-          historyLoadError instanceof Error
-            ? historyLoadError.message
-            : "Unable to load PvP history.";
-        setHistoryError(message);
-      } finally {
-        setHistoryLoading(false);
-        setHistoryLoadingMore(false);
-      }
-    },
-    [],
-  );
+      const data = (await response.json()) as {
+        history: PvpSessionHistoryEntry[];
+      };
+      setHistory(data.history ?? []);
+    } catch (historyLoadError) {
+      const message =
+        historyLoadError instanceof Error
+          ? historyLoadError.message
+          : "Unable to load PvP history.";
+      setHistoryError(message);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
 
   const joinSession = useCallback(
     async (targetSessionId: string) => {
@@ -249,17 +273,111 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
       setSubmitting(false);
     }
   };
+  const handleSelectAsyncMatch = useCallback(
+    async (targetMatchId: string) => {
+      setAsyncLoading(true);
+      setAsyncError(null);
+      try {
+        await fetchAsyncMatch(targetMatchId);
+      } catch (matchError) {
+        const message =
+          matchError instanceof Error
+            ? matchError.message
+            : "Unable to open async match.";
+        setAsyncError(message);
+      } finally {
+        setAsyncLoading(false);
+      }
+    },
+    [fetchAsyncMatch]
+  );
+
+  const handleStartAsyncMatch = useCallback(async () => {
+    if (!asyncMatchId) return;
+    setAsyncStarting(true);
+    setAsyncError(null);
+    try {
+      const response = await fetch(`/api/pvp/async/${asyncMatchId}/start`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Unable to start async match.");
+      }
+      const data = (await response.json()) as { match: AsyncPvpMatch };
+      setAsyncMatch(data.match);
+      const persistedAnswers = data.match.players[user.uid]?.selectedAnswers ?? {};
+      setAsyncAnswers(persistedAnswers);
+      const startedAt = data.match.players[user.uid]?.startedAt;
+      asyncTimerStartedAt.current = startedAt ? Date.parse(startedAt) : Date.now();
+      setAsyncTimerSeconds(0);
+    } catch (startError) {
+      const message =
+        startError instanceof Error
+          ? startError.message
+          : "Unable to start async match.";
+      setAsyncError(message);
+    } finally {
+      setAsyncStarting(false);
+    }
+  }, [asyncMatchId, user.uid]);
+
+  const handleSubmitAsyncMatch = useCallback(async () => {
+    if (!asyncMatchId || !asyncMatch || !asyncHasAnsweredAll) return;
+    setAsyncSubmitting(true);
+    setAsyncError(null);
+    try {
+      const response = await fetch(`/api/pvp/async/${asyncMatchId}/submit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          selectedAnswers: asyncAnswers,
+          timeTakenSeconds: asyncTimerSeconds,
+        }),
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Unable to submit async match.");
+      }
+      const data = (await response.json()) as { match: AsyncPvpMatch };
+      setAsyncMatch(data.match);
+      fetchAsyncInbox().catch(() => undefined);
+      fetchHistory().catch(() => undefined);
+    } catch (submitError) {
+      const message =
+        submitError instanceof Error
+          ? submitError.message
+          : "Unable to submit async match.";
+      setAsyncError(message);
+    } finally {
+      setAsyncSubmitting(false);
+    }
+  }, [
+    asyncAnswers,
+    asyncHasAnsweredAll,
+    asyncMatch,
+    asyncMatchId,
+    asyncTimerSeconds,
+    fetchAsyncInbox,
+    fetchHistory,
+  ]);
 
   useEffect(() => {
-    if (!initialSessionId || joinedByParamRef.current) return;
-    joinedByParamRef.current = true;
+    if (!initialSessionId) return;
+    if (initialSessionId === sessionId) return;
     setSessionIdInput(initialSessionId);
     joinSession(initialSessionId);
-  }, [initialSessionId, joinSession]);
+  }, [initialSessionId, joinSession, sessionId]);
+  useEffect(() => {
+    if (!initialAsyncMatchId) return;
+    if (initialAsyncMatchId === asyncMatchId) return;
+    handleSelectAsyncMatch(initialAsyncMatchId);
+  }, [asyncMatchId, handleSelectAsyncMatch, initialAsyncMatchId]);
 
   useEffect(() => {
-    fetchHistory({ reset: true });
-  }, [fetchHistory]);
+    fetchHistory();
+    fetchAsyncInbox().catch(() => undefined);
+  }, [fetchAsyncInbox, fetchHistory]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -314,9 +432,37 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
 
   useEffect(() => {
     if (session?.status === "completed") {
-      fetchHistory({ reset: true });
+      fetchHistory();
     }
   }, [fetchHistory, session?.status]);
+  useEffect(() => {
+    if (!asyncMatch || !asyncMatchId) return;
+    if (asyncMatch.status === "completed" || asyncHasSubmitted) return;
+    const startedAt = asyncMatch.players[user.uid]?.startedAt;
+    if (!startedAt) return;
+    if (!asyncTimerStartedAt.current) {
+      asyncTimerStartedAt.current = Date.parse(startedAt);
+    }
+    const interval = setInterval(() => {
+      if (!asyncTimerStartedAt.current) return;
+      const elapsed = Math.max(
+        0,
+        Math.floor((Date.now() - asyncTimerStartedAt.current) / 1000)
+      );
+      setAsyncTimerSeconds(elapsed);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [asyncHasSubmitted, asyncMatch, asyncMatchId, user.uid]);
+
+  useEffect(() => {
+    if (!asyncMatchId) return;
+    if (asyncMatch?.status !== "awaiting_opponent") return;
+    const poller = setInterval(() => {
+      fetchAsyncMatch(asyncMatchId).catch(() => undefined);
+      fetchAsyncInbox().catch(() => undefined);
+    }, 15000);
+    return () => clearInterval(poller);
+  }, [asyncMatch?.status, asyncMatchId, fetchAsyncInbox, fetchAsyncMatch]);
 
   const sessionLink = useMemo(() => {
     if (!sessionId) return null;
@@ -329,6 +475,11 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
     if (!session.winnerUid) return "Draw";
     return session.winnerUid === user.uid ? "You win!" : "You lose";
   }, [session, user.uid]);
+  const asyncWinnerLabel = useMemo(() => {
+    if (!asyncMatch || asyncMatch.status !== "completed") return "";
+    if (!asyncMatch.winnerUid) return "Draw";
+    return asyncMatch.winnerUid === user.uid ? "You win!" : "You lose";
+  }, [asyncMatch, user.uid]);
 
   const handleCopySessionLink = async () => {
     if (!sessionLink) return;
@@ -338,32 +489,6 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
       setTimeout(() => setCopied(false), 1500);
     } catch {
       setError("Unable to copy link.");
-    }
-  };
-
-  const challengeOpponent = async (targetUid: string | null) => {
-    if (!targetUid) return;
-    setChallengeingUid(targetUid);
-    setChallengeNotice(null);
-    try {
-      const response = await fetch("/api/pvp/challenges", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ challengedUid: targetUid }),
-      });
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || "Unable to send challenge.");
-      }
-      setChallengeNotice("Challenge sent.");
-    } catch (challengeError) {
-      setChallengeNotice(
-        challengeError instanceof Error
-          ? challengeError.message
-          : "Unable to send challenge.",
-      );
-    } finally {
-      setChallengeingUid(null);
     }
   };
 
@@ -426,6 +551,180 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
       {error ? (
         <p className="mt-4 text-sm text-rose-700 dark:text-rose-200">{error}</p>
       ) : null}
+      <div className="mt-6 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-slate-900 dark:text-slate-100">
+              Async challenges
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Complete on your own time and come back anytime.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setAsyncError(null);
+              fetchAsyncInbox().catch((inboxError) => {
+                setAsyncError(
+                  inboxError instanceof Error
+                    ? inboxError.message
+                    : "Unable to refresh async matches."
+                );
+              });
+            }}
+            className="text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+          >
+            Refresh
+          </button>
+        </div>
+        {asyncError ? (
+          <p className="mt-3 text-sm text-rose-700 dark:text-rose-200">{asyncError}</p>
+        ) : null}
+        {asyncMatches.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+            No async matches yet.
+          </p>
+        ) : (
+          <div className="mt-3 grid gap-2">
+            {asyncMatches.map((matchItem) => (
+              <button
+                key={matchItem.id}
+                type="button"
+                onClick={() => handleSelectAsyncMatch(matchItem.id)}
+                className={`rounded-xl border px-3 py-3 text-left text-sm transition ${
+                  asyncMatchId === matchItem.id
+                    ? "border-slate-400 bg-[color:var(--surface)]"
+                    : "border-[color:var(--border)] bg-[color:var(--surface)] hover:border-slate-400"
+                }`}
+              >
+                <p className="font-medium text-slate-800 dark:text-slate-100">
+                  Vs {matchItem.opponentDisplayName ?? matchItem.opponentEmail ?? "Unknown"}
+                </p>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {matchItem.status.replace("_", " ")} ·{" "}
+                  {new Date(matchItem.createdAt).toLocaleString()}
+                </p>
+              </button>
+            ))}
+          </div>
+        )}
+        {asyncLoading ? (
+          <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">Loading match...</p>
+        ) : null}
+        {asyncMatch ? (
+          <div className="mt-4 space-y-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
+            <p className="text-sm text-slate-700 dark:text-slate-200">
+              Opponent: {asyncOpponent?.displayName ?? asyncOpponent?.email ?? "Unknown"}
+            </p>
+            <p className="text-sm text-slate-700 dark:text-slate-200">
+              Status: {asyncMatch.status.replace("_", " ")}
+            </p>
+            {asyncMyPlayer?.startedAt ? (
+              <p className="text-sm text-slate-700 dark:text-slate-200">
+                Timer: {asyncTimerSeconds}s
+              </p>
+            ) : null}
+            {!asyncMyPlayer?.startedAt && asyncMatch.status !== "completed" ? (
+              <button
+                type="button"
+                onClick={handleStartAsyncMatch}
+                disabled={asyncStarting}
+                className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200"
+              >
+                {asyncStarting ? "Starting..." : "Start async run"}
+              </button>
+            ) : null}
+            {asyncMyPlayer?.startedAt ? (
+              <div className="space-y-3">
+                {asyncMatch.questions.map((question, index) => {
+                  const selectedAnswer =
+                    asyncAnswers[question.id] ??
+                    asyncMyPlayer?.selectedAnswers?.[question.id];
+                  const showResults = asyncMatch.status === "completed";
+                  return (
+                    <div
+                      key={`async-${question.id}`}
+                      className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3"
+                    >
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Question {index + 1}
+                      </p>
+                      <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                        {question.prompt}
+                      </p>
+                      <div className="mt-2 grid gap-2">
+                        {question.choices.map((choice, choiceIndex) => {
+                          const isSelected = selectedAnswer === choiceIndex;
+                          const isCorrect =
+                            showResults && choiceIndex === question.answerIndex;
+                          const isWrong =
+                            showResults &&
+                            isSelected &&
+                            choiceIndex !== question.answerIndex;
+                          return (
+                            <button
+                              key={`async-${question.id}-${choiceIndex}`}
+                              type="button"
+                              disabled={asyncHasSubmitted || asyncMatch.status === "completed"}
+                              onClick={() =>
+                                setAsyncAnswers((prev) => ({
+                                  ...prev,
+                                  [question.id]: choiceIndex,
+                                }))
+                              }
+                              className={`rounded-xl border px-3 py-2 text-left text-sm ${
+                                isCorrect
+                                  ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200"
+                                  : isWrong
+                                  ? "border-rose-400/60 bg-rose-400/10 text-rose-700 dark:text-rose-200"
+                                  : isSelected
+                                  ? "border-slate-400 bg-[color:var(--surface)] text-slate-900 dark:text-slate-100"
+                                  : "border-[color:var(--border)] bg-[color:var(--surface)] text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                              }`}
+                            >
+                              {choice}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+                {asyncMatch.status !== "completed" ? (
+                  <button
+                    type="button"
+                    onClick={handleSubmitAsyncMatch}
+                    disabled={!asyncHasAnsweredAll || asyncHasSubmitted || asyncSubmitting}
+                    className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                  >
+                    {asyncHasSubmitted
+                      ? "Submitted"
+                      : asyncSubmitting
+                      ? "Submitting..."
+                      : "Submit async answers"}
+                  </button>
+                ) : (
+                  <div className="rounded-xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-3 text-sm text-slate-700 dark:text-slate-200">
+                    <p className="font-medium">{asyncWinnerLabel}</p>
+                    <p className="mt-1">
+                      You: {asyncMyPlayer?.score ?? 0}/{asyncMyPlayer?.total ?? asyncTotalQuestions}
+                      {" · "}
+                      Opponent: {asyncOpponent?.score ?? 0}/
+                      {asyncOpponent?.total ?? asyncTotalQuestions}
+                    </p>
+                  </div>
+                )}
+                {asyncHasSubmitted && asyncMatch.status !== "completed" ? (
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Submitted. We&apos;ll update this once your opponent finishes.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
 
       {session ? (
         <div className="mt-6 space-y-4">
@@ -593,7 +892,7 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
           </h3>
           <button
             type="button"
-            onClick={() => fetchHistory({ reset: true })}
+            onClick={() => fetchHistory()}
             className="text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
           >
             Refresh
@@ -613,11 +912,6 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
           </p>
         ) : (
           <div className="mt-3 space-y-2">
-            {challengeNotice ? (
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {challengeNotice}
-              </p>
-            ) : null}
             {history.map((entry) => (
               <div
                 key={entry.sessionId}
@@ -639,6 +933,8 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
                       {entry.opponentTimeTakenSeconds}s)
                     </p>
                     <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                      Type: {entry.matchType === "async" ? "Async" : "Live"}{" "}
+                      {" · "}
                       Outcome:{" "}
                       <span
                         className={
@@ -662,34 +958,8 @@ export default function PvpPanel({ user, initialSessionId }: PvpPanelProps) {
                     {new Date(entry.completedAt).toLocaleString()}
                   </p>
                 </div>
-                {entry.opponentUid ? (
-                  <div className="mt-2">
-                    <button
-                      type="button"
-                      disabled={challengeingUid === entry.opponentUid}
-                      onClick={() => challengeOpponent(entry.opponentUid)}
-                      className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs font-semibold text-slate-600 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-300"
-                    >
-                      {challengeingUid === entry.opponentUid
-                        ? "Sending..."
-                        : "Challenge again"}
-                    </button>
-                  </div>
-                ) : null}
               </div>
             ))}
-            {historyHasMore ? (
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={() => fetchHistory({ cursor: historyCursor })}
-                  disabled={historyLoadingMore}
-                  className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs font-semibold text-slate-600 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-300"
-                >
-                  {historyLoadingMore ? "Loading..." : "Load more"}
-                </button>
-              </div>
-            ) : null}
           </div>
         )}
       </div>

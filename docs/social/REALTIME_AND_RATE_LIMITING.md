@@ -14,6 +14,10 @@
 - Enforced by in-memory limiter at `lib/server/rate-limit.ts`.
 - Each social/chat endpoint uses a per-user key.
 - Requests above 1 request/second return `429`.
+- Classification:
+  - not token bucket (no token store/refill/burst semantics),
+  - not leaky bucket (no queue + drain),
+  - closest to strict minimum inter-arrival time throttling.
 
 ## Notes
 - In-memory limiting is best-effort for single runtime instance.

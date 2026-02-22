@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { adminDb } from "@/lib/firebase/admin";
 import { getSessionUser } from "@/lib/auth/server";
-import type { PvpSession, PvpSessionHistoryEntry } from "@/lib/pvp/types";
+import type { PvpSession } from "@/lib/pvp/types";
+import {
+  buildHistoryEntry,
+  computeScore,
+  resolveWinner,
+} from "@/lib/pvp/scoring";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,69 +20,6 @@ const submitSchema = z.object({
 type RouteContext = {
   params: Promise<{ sessionId: string }>;
 };
-
-function resolveWinner(
-  firstUid: string,
-  secondUid: string,
-  session: PvpSession
-): { winnerUid: string | null; winnerReason: "score" | "time" | "tie" } {
-  const first = session.players[firstUid];
-  const second = session.players[secondUid];
-  const firstScore = Number(first?.score ?? 0);
-  const secondScore = Number(second?.score ?? 0);
-  if (firstScore > secondScore) {
-    return { winnerUid: firstUid, winnerReason: "score" };
-  }
-  if (secondScore > firstScore) {
-    return { winnerUid: secondUid, winnerReason: "score" };
-  }
-
-  const firstTime = Number(first?.timeTakenSeconds ?? Number.POSITIVE_INFINITY);
-  const secondTime = Number(
-    second?.timeTakenSeconds ?? Number.POSITIVE_INFINITY
-  );
-  if (firstTime < secondTime) {
-    return { winnerUid: firstUid, winnerReason: "time" };
-  }
-  if (secondTime < firstTime) {
-    return { winnerUid: secondUid, winnerReason: "time" };
-  }
-
-  return { winnerUid: null, winnerReason: "tie" };
-}
-
-function buildHistoryEntry(
-  session: PvpSession,
-  myUid: string,
-  opponentUid: string,
-  completedAt: string
-): PvpSessionHistoryEntry {
-  const me = session.players[myUid];
-  const opponent = session.players[opponentUid];
-  const isDraw = !session.winnerUid;
-  const outcome = isDraw
-    ? "draw"
-    : session.winnerUid === myUid
-    ? "win"
-    : "loss";
-
-  return {
-    sessionId: session.id,
-    opponentUid,
-    opponentDisplayName: opponent?.displayName ?? null,
-    opponentEmail: opponent?.email ?? null,
-    myScore: Number(me?.score ?? 0),
-    myTotal: Number(me?.total ?? session.questions.length),
-    myTimeTakenSeconds: Number(me?.timeTakenSeconds ?? 0),
-    opponentScore: Number(opponent?.score ?? 0),
-    opponentTotal: Number(opponent?.total ?? session.questions.length),
-    opponentTimeTakenSeconds: Number(opponent?.timeTakenSeconds ?? 0),
-    winnerUid: session.winnerUid ?? null,
-    winnerReason: session.winnerReason ?? "tie",
-    outcome,
-    completedAt,
-  };
-}
 
 export async function POST(request: Request, context: RouteContext) {
   const user = await getSessionUser();
@@ -105,10 +47,7 @@ export async function POST(request: Request, context: RouteContext) {
       }
 
       const total = current.questions.length;
-      const score = current.questions.filter(
-        (question) =>
-          payload.selectedAnswers[question.id] === question.answerIndex
-      ).length;
+      const score = computeScore(current.questions, payload.selectedAnswers);
       const existingPlayer = current.players[user.uid];
       const updatedPlayers = {
         ...current.players,
@@ -152,11 +91,11 @@ export async function POST(request: Request, context: RouteContext) {
           .doc(current.id);
         tx.set(
           firstHistoryRef,
-          buildHistoryEntry(completedSession, firstUid, secondUid, now)
+          buildHistoryEntry(completedSession, firstUid, secondUid, now, "sync")
         );
         tx.set(
           secondHistoryRef,
-          buildHistoryEntry(completedSession, secondUid, firstUid, now)
+          buildHistoryEntry(completedSession, secondUid, firstUid, now, "sync")
         );
         tx.set(firstUserRef, { activePvpSessionId: null }, { merge: true });
         tx.set(secondUserRef, { activePvpSessionId: null }, { merge: true });

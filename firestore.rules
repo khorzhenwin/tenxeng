@@ -83,5 +83,20 @@ service cloud.firestore {
       allow read: if isSignedIn() && resource.data.uid == request.auth.uid;
       allow write: if false;
     }
+
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
+
+    match /asyncPvpMatches/{matchId} {
+      allow read: if isSignedIn() && resource.data.participantIds.hasAny([request.auth.uid]);
+      allow write: if false;
+    }
+
+    match /reports/{reportId} {
+      allow read: if false;
+      allow write: if false;
+    }
   }
 }

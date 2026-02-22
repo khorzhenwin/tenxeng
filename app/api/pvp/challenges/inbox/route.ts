@@ -38,7 +38,13 @@ export async function GET() {
   ]);
 
   return NextResponse.json({
-    incoming: incomingSnap.docs.map((docSnap) => docSnap.data() as PvpChallenge),
-    outgoing: outgoingSnap.docs.map((docSnap) => docSnap.data() as PvpChallenge)
+    incoming: incomingSnap.docs.map((docSnap) => {
+      const challenge = docSnap.data() as PvpChallenge;
+      return { ...challenge, mode: challenge.mode ?? "async" } as PvpChallenge;
+    }),
+    outgoing: outgoingSnap.docs.map((docSnap) => {
+      const challenge = docSnap.data() as PvpChallenge;
+      return { ...challenge, mode: challenge.mode ?? "async" } as PvpChallenge;
+    })
   });
 }

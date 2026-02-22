@@ -3,12 +3,15 @@ import { getSessionUser } from "@/lib/auth/server";
 import { adminDb } from "@/lib/firebase/admin";
 import { consumeRateLimit } from "@/lib/server/rate-limit";
 import { getUserIdentity } from "@/lib/social/server";
-import type { PvpPlayer, PvpSession } from "@/lib/pvp/types";
+import { generateSystemDesignQuiz } from "@/lib/quiz/generate";
+import type { AsyncPvpMatch, PvpPlayer, PvpSession } from "@/lib/pvp/types";
 import type { PvpChallenge } from "@/lib/social/types";
 import { createSocialNotification } from "@/lib/social/notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const MODEL_NAME = "gemini-3-flash-preview";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -45,7 +48,7 @@ export async function POST(_: Request, context: RouteContext) {
         throw new Error("INVALID_STATUS");
       }
 
-      const sessionRef = adminDb.collection("pvpSessions").doc();
+      const mode = challenge.mode ?? "async";
       const [challengerIdentity, challengedIdentity] = await Promise.all([
         getUserIdentity(challenge.challengerUid),
         getUserIdentity(challenge.challengedUid)
@@ -62,6 +65,46 @@ export async function POST(_: Request, context: RouteContext) {
         email: challengedIdentity.email,
         joinedAt: now
       };
+      if (mode === "async") {
+        const matchRef = adminDb.collection("asyncPvpMatches").doc();
+        const questions = await generateSystemDesignQuiz(MODEL_NAME);
+        const expiresAt = new Date(
+          Date.now() + 3 * 24 * 60 * 60 * 1000
+        ).toISOString();
+        const match: AsyncPvpMatch = {
+          id: matchRef.id,
+          challengeId: challenge.id,
+          status: "open",
+          createdBy: challenge.challengerUid,
+          createdAt: now,
+          participantIds: [challenge.challengerUid, challenge.challengedUid],
+          players: {
+            [challenge.challengerUid]: challengerPlayer,
+            [challenge.challengedUid]: challengedPlayer
+          },
+          questions,
+          expiresAt
+        };
+        tx.set(matchRef, match);
+        tx.set(
+          challengeRef,
+          {
+            status: "accepted",
+            updatedAt: now,
+            respondedAt: now,
+            pvpSessionId: null,
+            asyncMatchId: match.id
+          },
+          { merge: true }
+        );
+        return {
+          mode,
+          asyncMatchId: match.id,
+          challengerUid: challenge.challengerUid
+        };
+      }
+
+      const sessionRef = adminDb.collection("pvpSessions").doc();
       const session: PvpSession = {
         id: sessionRef.id,
         status: "ready",
@@ -81,7 +124,8 @@ export async function POST(_: Request, context: RouteContext) {
           status: "accepted",
           updatedAt: now,
           respondedAt: now,
-          pvpSessionId: session.id
+          pvpSessionId: session.id,
+          asyncMatchId: null
         },
         { merge: true }
       );
@@ -95,7 +139,11 @@ export async function POST(_: Request, context: RouteContext) {
         { activePvpSessionId: session.id },
         { merge: true }
       );
-      return { sessionId: session.id, challengerUid: challenge.challengerUid };
+      return {
+        mode,
+        sessionId: session.id,
+        challengerUid: challenge.challengerUid
+      };
     });
     await createSocialNotification({
       uid: result.challengerUid,

@@ -46,12 +46,14 @@ export type PvpChallenge = {
   challengedUid: string;
   challengerDisplayName: string | null;
   challengedDisplayName: string | null;
+  mode: "sync" | "async";
   status: PvpChallengeStatus;
   createdAt: string;
   updatedAt: string;
   respondedAt: string | null;
   expiresAt: string;
   pvpSessionId: string | null;
+  asyncMatchId?: string | null;
 };
 
 export type ConversationType = "direct" | "group" | "system";
