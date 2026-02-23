@@ -62,6 +62,14 @@ type TopicStat = {
   accuracy: number;
 };
 
+type PvpHistorySummaryEntry = {
+  outcome?: "win" | "loss" | "draw";
+};
+
+type SocialSummaryResponse = {
+  friends?: unknown[];
+};
+
 const DEFAULT_TOPICS = [
   "Caching",
   "Load balancing",
@@ -124,6 +132,8 @@ function DashboardContent() {
   >({});
   const [statsLoading, setStatsLoading] = useState(false);
   const [topicStats, setTopicStats] = useState<TopicStat[]>([]);
+  const [pvpSummary, setPvpSummary] = useState({ won: 0, lost: 0 });
+  const [friendCount, setFriendCount] = useState<number | null>(null);
   const backfillRequested = useRef<Set<string>>(new Set());
   const statsInFlight = useRef(false);
   const [backfillLoading, setBackfillLoading] = useState(false);
@@ -543,6 +553,50 @@ function DashboardContent() {
     statsInFlight.current = true;
     setStatsLoading(true);
     try {
+      const [pvpSummaryResponse, socialSummaryResponse] = await Promise.allSettled([
+        fetch("/api/pvp/history"),
+        fetch("/api/friends"),
+      ]);
+
+      if (
+        pvpSummaryResponse.status === "fulfilled" &&
+        pvpSummaryResponse.value.ok
+      ) {
+        const payload = (await pvpSummaryResponse.value.json()) as {
+          history?: PvpHistorySummaryEntry[];
+        };
+        const summary = (payload.history ?? []).reduce(
+          (acc, entry) => {
+            if (entry.outcome === "win") acc.won += 1;
+            if (entry.outcome === "loss") acc.lost += 1;
+            return acc;
+          },
+          { won: 0, lost: 0 }
+        );
+        setPvpSummary(summary);
+      }
+
+      if (
+        socialSummaryResponse.status === "fulfilled" &&
+        socialSummaryResponse.value.ok
+      ) {
+        const payload = (await socialSummaryResponse.value.json()) as SocialSummaryResponse;
+        setFriendCount(Array.isArray(payload.friends) ? payload.friends.length : 0);
+      } else if (
+        socialSummaryResponse.status === "fulfilled" &&
+        socialSummaryResponse.value.status === 429
+      ) {
+        // /api/friends is rate-limited; retry once to avoid showing a stale/false zero.
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        const retryResponse = await fetch("/api/friends");
+        if (retryResponse.ok) {
+          const retryPayload = (await retryResponse.json()) as SocialSummaryResponse;
+          setFriendCount(
+            Array.isArray(retryPayload.friends) ? retryPayload.friends.length : 0
+          );
+        }
+      }
+
       const resultsRef = collection(
         firestore,
         "users",
@@ -1252,7 +1306,7 @@ function DashboardContent() {
                 Refresh
               </button>
             </div>
-            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+            <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   Total questions answered
@@ -1281,6 +1335,30 @@ function DashboardContent() {
                 </p>
                 <p className="mt-1 text-xs text-rose-700/80 dark:text-rose-200/80">
                   {(wrongRatio * 100).toFixed(0)}%
+                </p>
+              </div>
+              <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-3">
+                <p className="text-xs text-emerald-700 dark:text-emerald-200">
+                  PvP won
+                </p>
+                <p className="mt-2 text-2xl font-semibold text-emerald-700 dark:text-emerald-200">
+                  {pvpSummary.won}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 px-4 py-3">
+                <p className="text-xs text-rose-700 dark:text-rose-200">
+                  PvP lost
+                </p>
+                <p className="mt-2 text-2xl font-semibold text-rose-700 dark:text-rose-200">
+                  {pvpSummary.lost}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-3">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Total friends
+                </p>
+                <p className="mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100">
+                  {friendCount ?? "—"}
                 </p>
               </div>
             </div>
