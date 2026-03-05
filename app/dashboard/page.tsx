@@ -815,7 +815,7 @@ function DashboardContent() {
   };
 
   return (
-    <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="min-h-screen bg-transparent text-[color:var(--foreground)]">
       <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-12">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-2">
@@ -1669,7 +1669,7 @@ export default function DashboardPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
+        <div className="min-h-screen bg-transparent text-[color:var(--foreground)]">
           <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-12">
             <p className="text-sm text-slate-500 dark:text-slate-400">
               Loading dashboard...

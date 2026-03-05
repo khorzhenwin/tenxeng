@@ -88,7 +88,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-[color:var(--background)] px-4 py-10 text-[color:var(--foreground)] sm:px-6 sm:py-12">
+    <div className="relative flex min-h-screen items-center justify-center bg-transparent px-4 py-10 text-[color:var(--foreground)] sm:px-6 sm:py-12">
       <Link
         href="/"
         aria-label="Go to home"

@@ -40,3 +40,149 @@ body {
 html {
   background: var(--background);
 }
+
+.animated-background {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  perspective: 1100px;
+  background:
+    radial-gradient(
+      circle at 20% 20%,
+      color-mix(in srgb, #60a5fa 20%, transparent) 0%,
+      transparent 45%
+    ),
+    radial-gradient(
+      circle at 80% 80%,
+      color-mix(in srgb, #a78bfa 20%, transparent) 0%,
+      transparent 50%
+    );
+}
+
+.animated-background__grid {
+  position: absolute;
+  inset: -25% -10% 0;
+  background-image:
+    linear-gradient(
+      to right,
+      color-mix(in srgb, var(--foreground) 10%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--foreground) 10%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 44px 44px;
+  transform: rotateX(72deg) translateZ(-220px);
+  transform-origin: center top;
+  animation: grid-drift 20s linear infinite;
+  opacity: 0.45;
+}
+
+.animated-background__orb {
+  position: absolute;
+  width: clamp(180px, 28vw, 420px);
+  aspect-ratio: 1;
+  border-radius: 999px;
+  filter: blur(8px);
+  will-change: transform;
+}
+
+.animated-background__orb--one {
+  top: 7%;
+  left: 10%;
+  background: radial-gradient(
+    circle at 30% 30%,
+    color-mix(in srgb, #38bdf8 75%, white) 0%,
+    color-mix(in srgb, #0ea5e9 65%, transparent) 35%,
+    transparent 70%
+  );
+  animation: float-one 14s ease-in-out infinite;
+}
+
+.animated-background__orb--two {
+  right: 8%;
+  top: 14%;
+  background: radial-gradient(
+    circle at 35% 35%,
+    color-mix(in srgb, #a78bfa 78%, white) 0%,
+    color-mix(in srgb, #8b5cf6 68%, transparent) 36%,
+    transparent 72%
+  );
+  animation: float-two 18s ease-in-out infinite;
+}
+
+.animated-background__orb--three {
+  left: 38%;
+  bottom: -4%;
+  background: radial-gradient(
+    circle at 30% 35%,
+    color-mix(in srgb, #22d3ee 70%, white) 0%,
+    color-mix(in srgb, #0891b2 65%, transparent) 34%,
+    transparent 70%
+  );
+  animation: float-three 16s ease-in-out infinite;
+}
+
+.animated-background__noise {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--foreground) 9%, transparent) 0.6px,
+    transparent 0.6px
+  );
+  background-size: 3px 3px;
+  opacity: 0.08;
+}
+
+@keyframes grid-drift {
+  from {
+    transform: rotateX(72deg) translate3d(0, 0, -220px);
+  }
+  to {
+    transform: rotateX(72deg) translate3d(0, 44px, -220px);
+  }
+}
+
+@keyframes float-one {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg) scale(1);
+  }
+  50% {
+    transform: translate3d(22px, -36px, 110px) rotateX(14deg) rotateY(-18deg)
+      scale(1.12);
+  }
+}
+
+@keyframes float-two {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg) scale(1);
+  }
+  50% {
+    transform: translate3d(-32px, 22px, 140px) rotateX(-18deg) rotateY(20deg)
+      scale(1.08);
+  }
+}
+
+@keyframes float-three {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotateX(0deg) rotateY(0deg) scale(1);
+  }
+  50% {
+    transform: translate3d(26px, -18px, 95px) rotateX(16deg) rotateY(16deg)
+      scale(1.1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animated-background__grid,
+  .animated-background__orb {
+    animation: none;
+  }
+}
