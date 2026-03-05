@@ -2,7 +2,7 @@ import Link from "next/link";
 
 export default function Home() {
   return (
-    <div className="min-h-screen bg-[color:var(--background)] text-[color:var(--foreground)]">
+    <div className="min-h-screen bg-transparent text-[color:var(--foreground)]">
       <main className="mx-auto flex w-full max-w-5xl flex-col gap-10 px-4 py-12 sm:px-6 sm:py-20">
         <div className="space-y-6">
           <p className="text-sm uppercase tracking-[0.3em] text-slate-500 dark:text-slate-400">

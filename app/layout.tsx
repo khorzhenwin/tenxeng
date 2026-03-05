@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Providers from "@/app/providers";
+import AnimatedBackground from "@/components/AnimatedBackground";
 import ThemeToggle from "@/components/ThemeToggle";
 import "./globals.css";
 
@@ -31,8 +32,9 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} min-h-full antialiased`}
       >
         <Providers>
+          <AnimatedBackground />
           <ThemeToggle />
-          {children}
+          <div className="relative z-10">{children}</div>
         </Providers>
       </body>
     </html>
