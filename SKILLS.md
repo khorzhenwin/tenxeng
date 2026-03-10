@@ -9,7 +9,7 @@ This file is the repo-level canonical source for agent skills used across:
 
 - Canonical definitions live in `.cursor/skills/*/SKILL.md`.
 - Mirrors for other agent ecosystems must stay semantically equivalent:
-  - `.claude/skills/*.md`
+  - `.claude/skills/*/SKILL.md`
   - `.antigravity/skills/*.md`
 - When a skill is added/updated/removed, update all three ecosystems in the same change.
 
@@ -25,27 +25,27 @@ This file is the repo-level canonical source for agent skills used across:
 
 - `firebase-integration`
   - Cursor: `.cursor/skills/firebase-integration/SKILL.md`
-  - Claude: `.claude/skills/firebase-integration.md`
+  - Claude: `.claude/skills/firebase-integration/SKILL.md`
   - Antigravity: `.antigravity/skills/firebase-integration.md`
 
 - `gemini-question-generation`
   - Cursor: `.cursor/skills/gemini-question-generation/SKILL.md`
-  - Claude: `.claude/skills/gemini-question-generation.md`
+  - Claude: `.claude/skills/gemini-question-generation/SKILL.md`
   - Antigravity: `.antigravity/skills/gemini-question-generation.md`
 
 - `integration-standards`
   - Cursor: `.cursor/skills/integration-standards/SKILL.md`
-  - Claude: `.claude/skills/integration-standards.md`
+  - Claude: `.claude/skills/integration-standards/SKILL.md`
   - Antigravity: `.antigravity/skills/integration-standards.md`
 
 - `integration-testing`
   - Cursor: `.cursor/skills/integration-testing/SKILL.md`
-  - Claude: `.claude/skills/integration-testing.md`
+  - Claude: `.claude/skills/integration-testing/SKILL.md`
   - Antigravity: `.antigravity/skills/integration-testing.md`
 
 - `project-layout`
   - Cursor: `.cursor/skills/project-layout/SKILL.md`
-  - Claude: `.claude/skills/project-layout.md`
+  - Claude: `.claude/skills/project-layout/SKILL.md`
   - Antigravity: `.antigravity/skills/project-layout.md`
 
 ## Maintenance Checklist
