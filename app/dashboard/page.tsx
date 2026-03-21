@@ -24,6 +24,8 @@ import { clearSession } from "@/lib/auth/client";
 import { useAuth } from "@/components/AuthProvider";
 import type {
   DailyQuiz,
+  PracticeSession,
+  PracticeSourceType,
   QuizResult,
   QuizReviewItem,
   QuizReviewSession,
@@ -109,6 +111,18 @@ function DashboardContent() {
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [practiceSessions, setPracticeSessions] = useState<PracticeSession[]>([]);
+  const [practiceSession, setPracticeSession] = useState<PracticeSession | null>(null);
+  const [practiceLoading, setPracticeLoading] = useState(false);
+  const [practiceCreatingSource, setPracticeCreatingSource] =
+    useState<PracticeSourceType | null>(null);
+  const [practiceSubmitting, setPracticeSubmitting] = useState(false);
+  const [practiceError, setPracticeError] = useState<string | null>(null);
+  const [practiceSubmitError, setPracticeSubmitError] = useState<string | null>(null);
+  const [practiceAnswers, setPracticeAnswers] = useState<Record<string, number>>({});
+  const [expandedPracticeSessionId, setExpandedPracticeSessionId] = useState<
+    string | null
+  >(null);
   const [reviewSessions, setReviewSessions] = useState<QuizReviewSession[]>([]);
   const [reviewInitialized, setReviewInitialized] = useState(false);
   const [reviewLoading, setReviewLoading] = useState(false);
@@ -248,6 +262,112 @@ function DashboardContent() {
     setHistory(results);
   }, [user]);
 
+  const loadPracticeSessions = useCallback(async () => {
+    if (!user) return;
+    setPracticeLoading(true);
+    setPracticeError(null);
+    try {
+      const response = await fetch("/api/practice-quiz?limit=10");
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? "Unable to load practice history.");
+      }
+
+      const data = (await response.json()) as { sessions?: PracticeSession[] };
+      const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+      setPracticeSessions(sessions);
+      setPracticeSession((prev) => {
+        if (prev) {
+          return sessions.find((session) => session.id === prev.id) ?? prev;
+        }
+        return sessions.find((session) => session.status === "ready") ?? null;
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to load practice history.";
+      setPracticeError(message);
+    } finally {
+      setPracticeLoading(false);
+    }
+  }, [user]);
+
+  const startPracticeSession = useCallback(
+    async (sourceType: PracticeSourceType) => {
+      setPracticeError(null);
+      setPracticeSubmitError(null);
+      setPracticeCreatingSource(sourceType);
+      try {
+        const response = await fetch("/api/practice-quiz", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sourceType }),
+        });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as
+            | { error?: string }
+            | null;
+          throw new Error(payload?.error ?? "Unable to start practice drill.");
+        }
+
+        const data = (await response.json()) as { session: PracticeSession };
+        setPracticeSession(data.session);
+        setPracticeAnswers({});
+        setPracticeSessions((prev) => [
+          data.session,
+          ...prev.filter((session) => session.id !== data.session.id),
+        ]);
+        setExpandedPracticeSessionId(data.session.id);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to start practice drill.";
+        setPracticeError(message);
+      } finally {
+        setPracticeCreatingSource(null);
+      }
+    },
+    []
+  );
+
+  const submitPracticeSession = useCallback(async () => {
+    if (!practiceSession || practiceSession.status === "completed") {
+      return;
+    }
+
+    setPracticeSubmitError(null);
+    setPracticeSubmitting(true);
+    try {
+      const response = await fetch("/api/practice-result", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: practiceSession.id,
+          selectedAnswers: practiceAnswers,
+        }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? "Unable to submit practice drill.");
+      }
+
+      const data = (await response.json()) as { session: PracticeSession };
+      setPracticeSession(data.session);
+      setPracticeSessions((prev) => [
+        data.session,
+        ...prev.filter((session) => session.id !== data.session.id),
+      ]);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to submit practice drill.";
+      setPracticeSubmitError(message);
+    } finally {
+      setPracticeSubmitting(false);
+    }
+  }, [practiceAnswers, practiceSession]);
+
   const loadReviewSessions = useCallback(async (options?: { append?: boolean }) => {
     if (!user) return;
     const append = options?.append ?? false;
@@ -383,6 +503,12 @@ function DashboardContent() {
 
   useEffect(() => {
     if (!user) {
+      setPracticeSessions([]);
+      setPracticeSession(null);
+      setPracticeError(null);
+      setPracticeSubmitError(null);
+      setPracticeAnswers({});
+      setExpandedPracticeSessionId(null);
       setReviewSessions([]);
       setReviewInitialized(false);
       setReviewNextCursor(null);
@@ -396,6 +522,15 @@ function DashboardContent() {
     if (reviewInitialized) return;
     void loadReviewSessions();
   }, [activeTab, loadReviewSessions, reviewInitialized, user]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    if (activeTab !== "practice") return;
+    if (practiceSessions.length > 0) return;
+    void loadPracticeSessions();
+  }, [activeTab, loadPracticeSessions, practiceSessions.length, user]);
 
   const totalQuestions = quizState.quiz?.questions.length ?? 0;
   const isCompletedToday = useMemo(() => {
@@ -494,6 +629,19 @@ function DashboardContent() {
       yearWeekStarts.filter((weekStart) => weekStart <= currentWeekStart),
     [yearWeekStarts, currentWeekStart]
   );
+  const practiceQuestionCount = practiceSession?.questions.length ?? 0;
+  const hasAnsweredAllPractice = useMemo(() => {
+    if (!practiceSession || practiceSession.status === "completed") {
+      return false;
+    }
+    return practiceSession.questions.every((question) =>
+      Object.prototype.hasOwnProperty.call(practiceAnswers, question.id)
+    );
+  }, [practiceAnswers, practiceSession]);
+  const practiceDisplayAnswers =
+    practiceSession?.status === "completed"
+      ? practiceSession.selectedAnswers
+      : practiceAnswers;
   const reviewTopicGroups = useMemo<ReviewTopicGroup[]>(() => {
     const topicMap = new Map<string, QuizReviewItem[]>();
     reviewSessions.forEach((session) => {
@@ -599,6 +747,10 @@ function DashboardContent() {
     setAnswers((prev) => ({ ...prev, [questionId]: choiceIndex }));
   };
 
+  const handlePracticeSelect = (questionId: string, choiceIndex: number) => {
+    setPracticeAnswers((prev) => ({ ...prev, [questionId]: choiceIndex }));
+  };
+
   const handleSubmit = async () => {
     if (!quizState.quiz || !user) return;
     setSubmitError(null);
@@ -632,6 +784,17 @@ function DashboardContent() {
     const month = dateKey.slice(4, 6);
     const day = dateKey.slice(6, 8);
     return `${day}/${month}/${year}`;
+  }
+
+  function formatPracticeSource(sourceType: PracticeSourceType) {
+    return sourceType === "weak-topics"
+      ? "Practice weak topics"
+      : "Practice recent mistakes";
+  }
+
+  function formatTimestamp(value: string | null) {
+    if (!value) return "—";
+    return new Date(value).toLocaleString();
   }
 
   const loadHistoryQuiz = async (dateKey: string) => {
@@ -1089,6 +1252,7 @@ function DashboardContent() {
         <div className="mt-6 flex w-full flex-wrap items-center gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-1 sm:mt-8 sm:rounded-full">
           {[
             { id: "questions", label: "Questions" },
+            { id: "practice", label: "Practice" },
             { id: "review", label: "Review mistakes" },
             { id: "preferences", label: "Preferences" },
             { id: "leaderboard", label: "Leaderboard" },
@@ -1102,6 +1266,7 @@ function DashboardContent() {
                 setActiveTab(
                   tab.id as
                     | "questions"
+                    | "practice"
                     | "review"
                     | "preferences"
                     | "leaderboard"
@@ -1342,6 +1507,309 @@ function DashboardContent() {
                                 )}
                               </div>
                             )}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </>
+        ) : activeTab === "practice" ? (
+          <>
+            <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold">Adaptive practice drills</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Generate a fresh 5-question drill from your weak areas or recent mistakes without affecting streaks or leaderboard standing.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => startPracticeSession("weak-topics")}
+                    disabled={practiceCreatingSource !== null}
+                    className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                  >
+                    {practiceCreatingSource === "weak-topics"
+                      ? "Generating..."
+                      : "Practice weak topics"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => startPracticeSession("recent-mistakes")}
+                    disabled={practiceCreatingSource !== null}
+                    className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200"
+                  >
+                    {practiceCreatingSource === "recent-mistakes"
+                      ? "Generating..."
+                      : "Practice recent mistakes"}
+                  </button>
+                </div>
+              </div>
+
+              {practiceError ? (
+                <p className="mt-4 text-sm text-rose-700 dark:text-rose-200">
+                  {practiceError}
+                </p>
+              ) : null}
+
+              {practiceSession ? (
+                <div className="mt-6 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                        {formatPracticeSource(practiceSession.sourceType)}
+                      </p>
+                      <h3 className="mt-2 text-lg font-semibold text-slate-900 dark:text-slate-100">
+                        {practiceSession.status === "completed"
+                          ? "Latest completed practice"
+                          : "Current practice session"}
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                        Started {formatTimestamp(practiceSession.createdAt)}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-1 text-xs font-semibold text-slate-600 dark:text-slate-300">
+                        {practiceQuestionCount} questions
+                      </span>
+                      <span className="rounded-full border border-sky-400/40 bg-sky-400/10 px-3 py-1 text-xs font-semibold text-sky-700 dark:text-sky-200">
+                        {practiceSession.status === "completed"
+                          ? `${practiceSession.score}/${practiceSession.total}`
+                          : "In progress"}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {practiceSession.topics.map((topic) => (
+                      <span
+                        key={`${practiceSession.id}-${topic}`}
+                        className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-1 text-xs text-slate-600 dark:text-slate-300"
+                      >
+                        {topic}
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="mt-6 space-y-5">
+                    {practiceSession.questions.map((question, index) => (
+                      <div
+                        key={question.id}
+                        className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-5"
+                      >
+                        <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                          Practice question {index + 1}
+                        </p>
+                        <p className="mt-2 text-base font-medium text-slate-900 dark:text-slate-100">
+                          {question.prompt}
+                        </p>
+                        <div className="mt-4 grid gap-2 text-sm">
+                          {question.choices.map((choice, choiceIndex) => {
+                            const isCorrect =
+                              practiceSession.status === "completed" &&
+                              choiceIndex === question.answerIndex;
+                            const isSelected =
+                              practiceDisplayAnswers[question.id] === choiceIndex;
+                            const isWrong =
+                              practiceSession.status === "completed" &&
+                              isSelected &&
+                              choiceIndex !== question.answerIndex;
+
+                            return (
+                              <button
+                                key={`${question.id}-${choiceIndex}`}
+                                type="button"
+                                onClick={() =>
+                                  practiceSession.status !== "completed" &&
+                                  handlePracticeSelect(question.id, choiceIndex)
+                                }
+                                className={`rounded-xl border px-4 py-3 text-left ${
+                                  isCorrect
+                                    ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200"
+                                    : isWrong
+                                    ? "border-rose-400/60 bg-rose-400/10 text-rose-700 dark:text-rose-200"
+                                    : isSelected
+                                    ? "border-slate-400 bg-[color:var(--surface-muted)] text-slate-900 dark:text-slate-100"
+                                    : "border-[color:var(--border)] bg-[color:var(--surface)] text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                                }`}
+                              >
+                                {choice}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {practiceSession.status === "completed" ? (
+                          <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">
+                            Explanation: {question.explanation}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      {practiceSession.status === "completed" ? (
+                        <p className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                          Score: {practiceSession.score}/{practiceSession.total}
+                        </p>
+                      ) : (
+                        <p className="text-sm text-slate-500 dark:text-slate-400">
+                          Complete all questions to submit this drill.
+                        </p>
+                      )}
+                      {practiceSubmitError ? (
+                        <p className="mt-2 text-sm text-rose-700 dark:text-rose-200">
+                          {practiceSubmitError}
+                        </p>
+                      ) : null}
+                    </div>
+                    {practiceSession.status === "completed" ? (
+                      <button
+                        type="button"
+                        onClick={() => setPracticeSession(null)}
+                        className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                      >
+                        Close session
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={submitPracticeSession}
+                        disabled={!hasAnsweredAllPractice || practiceSubmitting}
+                        className="rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                      >
+                        {practiceSubmitting ? "Submitting..." : "Submit practice"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-6 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-5 text-sm text-slate-600 dark:text-slate-300">
+                  Start a targeted drill to practice weak areas without touching your daily quiz progress.
+                </div>
+              )}
+            </section>
+
+            <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-xl font-semibold">Practice history</h2>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Review recent drills separately from your daily quiz history.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => loadPracticeSessions()}
+                  disabled={practiceLoading}
+                  className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200"
+                >
+                  {practiceLoading ? "Refreshing..." : "Refresh history"}
+                </button>
+              </div>
+
+              {practiceLoading && practiceSessions.length === 0 ? (
+                <p className="mt-6 text-sm text-slate-500 dark:text-slate-400">
+                  Loading practice history...
+                </p>
+              ) : practiceSessions.length === 0 ? (
+                <p className="mt-6 text-sm text-slate-500 dark:text-slate-400">
+                  No practice sessions yet.
+                </p>
+              ) : (
+                <div className="mt-6 space-y-3">
+                  {practiceSessions.map((session) => {
+                    const isExpanded = expandedPracticeSessionId === session.id;
+                    return (
+                      <div
+                        key={session.id}
+                        className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedPracticeSessionId((prev) =>
+                              prev === session.id ? null : session.id
+                            )
+                          }
+                          className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left"
+                        >
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                              {formatPracticeSource(session.sourceType)}
+                            </p>
+                            <p className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">
+                              {formatTimestamp(session.createdAt)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+                            <span>
+                              {session.status === "completed"
+                                ? `${session.score}/${session.total}`
+                                : "In progress"}
+                            </span>
+                            <span>{isExpanded ? "Hide" : "View"}</span>
+                          </div>
+                        </button>
+
+                        {isExpanded ? (
+                          <div className="space-y-4 border-t border-[color:var(--border)] px-4 py-4">
+                            <div className="flex flex-wrap gap-2">
+                              {session.topics.map((topic) => (
+                                <span
+                                  key={`${session.id}-${topic}`}
+                                  className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface)] px-3 py-1 text-xs text-slate-600 dark:text-slate-300"
+                                >
+                                  {topic}
+                                </span>
+                              ))}
+                            </div>
+                            {session.questions.map((question, index) => {
+                              const selected = session.selectedAnswers[question.id];
+                              return (
+                                <div
+                                  key={question.id}
+                                  className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4"
+                                >
+                                  <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                                    Practice question {index + 1}
+                                  </p>
+                                  <p className="mt-2 text-sm text-slate-900 dark:text-slate-100">
+                                    {question.prompt}
+                                  </p>
+                                  <div className="mt-3 grid gap-2 text-sm">
+                                    {question.choices.map((choice, choiceIndex) => {
+                                      const isCorrect = choiceIndex === question.answerIndex;
+                                      const isSelected = choiceIndex === selected;
+                                      return (
+                                        <div
+                                          key={`${question.id}-${choiceIndex}`}
+                                          className={`rounded-xl border px-3 py-2 ${
+                                            isCorrect
+                                              ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200"
+                                              : isSelected
+                                              ? "border-rose-400/60 bg-rose-400/10 text-rose-700 dark:text-rose-200"
+                                              : "border-[color:var(--border)] text-slate-600 dark:text-slate-300"
+                                          }`}
+                                        >
+                                          {choice}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                  {session.status === "completed" ? (
+                                    <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                                      Explanation: {question.explanation}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
                           </div>
                         ) : null}
                       </div>

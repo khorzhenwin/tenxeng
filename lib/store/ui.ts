@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 type DashboardTab =
   | "questions"
+  | "practice"
   | "review"
   | "preferences"
   | "leaderboard"
@@ -38,12 +39,13 @@ export const useUiStore = create<UiState>()(
     }),
     {
       name: "tenxeng-ui",
-      version: 4,
+      version: 5,
       migrate: (state) => {
         const data = (state as PersistedUiState | undefined) ?? {};
         const allowed = new Set([10, 25, 50]);
         const allowedTabs = new Set([
           "questions",
+          "practice",
           "review",
           "preferences",
           "leaderboard",

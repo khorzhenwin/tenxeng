@@ -24,6 +24,23 @@ export type QuizResult = {
   completedAt: string;
 };
 
+export type PracticeSourceType = "weak-topics" | "recent-mistakes";
+
+export type PracticeSessionStatus = "ready" | "completed";
+
+export type PracticeSession = {
+  id: string;
+  sourceType: PracticeSourceType;
+  topics: string[];
+  questions: QuizQuestion[];
+  createdAt: string;
+  status: PracticeSessionStatus;
+  total: number;
+  selectedAnswers: Record<string, number>;
+  score: number | null;
+  completedAt: string | null;
+};
+
 export type QuizReviewItem = {
   id: string;
   dateKey: string;
