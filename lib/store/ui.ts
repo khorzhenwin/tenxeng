@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 type DashboardTab =
   | "questions"
+  | "review"
   | "preferences"
   | "leaderboard"
   | "profile"
@@ -43,6 +44,7 @@ export const useUiStore = create<UiState>()(
         const allowed = new Set([10, 25, 50]);
         const allowedTabs = new Set([
           "questions",
+          "review",
           "preferences",
           "leaderboard",
           "profile",

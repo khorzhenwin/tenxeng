@@ -22,10 +22,15 @@ import { signOut } from "firebase/auth";
 import { firebaseAuth, firestore } from "@/lib/firebase/client";
 import { clearSession } from "@/lib/auth/client";
 import { useAuth } from "@/components/AuthProvider";
-import type { DailyQuiz, QuizResult } from "@/lib/quiz/types";
+import type {
+  DailyQuiz,
+  QuizResult,
+  QuizReviewItem,
+  QuizReviewSession,
+} from "@/lib/quiz/types";
 import {
   getDateKeyForTimezone,
-  getMonthWeekStarts,
+  getYearWeekStartsUntilDate,
   getWeekEndDateKey,
   getWeekStartDateKey,
   parseDateKeyToDate,
@@ -70,6 +75,11 @@ type SocialSummaryResponse = {
   friends?: unknown[];
 };
 
+type ReviewTopicGroup = {
+  topic: string;
+  items: QuizReviewItem[];
+};
+
 const DEFAULT_TOPICS = [
   "Caching",
   "Load balancing",
@@ -99,6 +109,19 @@ function DashboardContent() {
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [reviewSessions, setReviewSessions] = useState<QuizReviewSession[]>([]);
+  const [reviewInitialized, setReviewInitialized] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewLoadingMore, setReviewLoadingMore] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
+  const [reviewNextCursor, setReviewNextCursor] = useState<string | null>(null);
+  const [reviewedThisVisitCount, setReviewedThisVisitCount] = useState(0);
+  const [reviewMutatingIds, setReviewMutatingIds] = useState<Record<string, boolean>>(
+    {}
+  );
+  const [expandedReviewTopics, setExpandedReviewTopics] = useState<
+    Record<string, boolean>
+  >({});
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedDateKey, setExpandedDateKey] = useState<string | null>(null);
   const [topicDefaults, setTopicDefaults] = useState<string[]>(DEFAULT_TOPICS);
@@ -225,6 +248,100 @@ function DashboardContent() {
     setHistory(results);
   }, [user]);
 
+  const loadReviewSessions = useCallback(async (options?: { append?: boolean }) => {
+    if (!user) return;
+    const append = options?.append ?? false;
+    const cursor = append ? reviewNextCursor : null;
+    if (append && !cursor) {
+      return;
+    }
+
+    setReviewError(null);
+    if (append) {
+      setReviewLoadingMore(true);
+    } else {
+      setReviewLoading(true);
+    }
+
+    try {
+      const params = new URLSearchParams({ limit: "4" });
+      if (cursor) {
+        params.set("cursor", cursor);
+      }
+      const response = await fetch(`/api/quiz-review?${params.toString()}`);
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? "Unable to load review sessions.");
+      }
+      const data = (await response.json()) as {
+        sessions?: QuizReviewSession[];
+        nextCursor?: string | null;
+      };
+      const sessions = Array.isArray(data.sessions) ? data.sessions : [];
+      setReviewSessions((prev) => (append ? [...prev, ...sessions] : sessions));
+      setReviewNextCursor(
+        typeof data.nextCursor === "string" ? data.nextCursor : null
+      );
+      setReviewInitialized(true);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to load review sessions.";
+      setReviewError(message);
+    } finally {
+      if (append) {
+        setReviewLoadingMore(false);
+      } else {
+        setReviewLoading(false);
+      }
+    }
+  }, [reviewNextCursor, user]);
+
+  const markReviewItem = useCallback(async (itemId: string) => {
+    setReviewError(null);
+    setReviewMutatingIds((prev) => ({ ...prev, [itemId]: true }));
+    try {
+      const response = await fetch("/api/quiz-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? "Unable to mark mistake as reviewed.");
+      }
+
+      setReviewSessions((prev) =>
+        prev
+          .map((session) => {
+            const nextItems = session.items.filter((item) => item.id !== itemId);
+            return {
+              ...session,
+              items: nextItems,
+              mistakeCount: nextItems.length,
+            };
+          })
+          .filter((session) => session.items.length > 0)
+      );
+      setReviewedThisVisitCount((prev) => prev + 1);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to mark mistake as reviewed.";
+      setReviewError(message);
+    } finally {
+      setReviewMutatingIds((prev) => {
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+    }
+  }, []);
+
   const loadUserSettings = useCallback(async () => {
     if (!user) return;
     const userRef = doc(firestore, "users", user.uid);
@@ -263,6 +380,22 @@ function DashboardContent() {
     const interval = setInterval(ping, 30000);
     return () => clearInterval(interval);
   }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      setReviewSessions([]);
+      setReviewInitialized(false);
+      setReviewNextCursor(null);
+      setReviewError(null);
+      setReviewedThisVisitCount(0);
+      setReviewMutatingIds({});
+      setExpandedReviewTopics({});
+      return;
+    }
+    if (activeTab !== "review") return;
+    if (reviewInitialized) return;
+    void loadReviewSessions();
+  }, [activeTab, loadReviewSessions, reviewInitialized, user]);
 
   const totalQuestions = quizState.quiz?.questions.length ?? 0;
   const isCompletedToday = useMemo(() => {
@@ -348,8 +481,8 @@ function DashboardContent() {
   const correctRatio =
     profileSummary.total > 0 ? profileSummary.correct / profileSummary.total : 0;
   const wrongRatio = profileSummary.total > 0 ? wrongAnswers / profileSummary.total : 0;
-  const monthWeekStarts = useMemo(
-    () => getMonthWeekStarts(LEADERBOARD_TIMEZONE),
+  const yearWeekStarts = useMemo(
+    () => getYearWeekStartsUntilDate(LEADERBOARD_TIMEZONE),
     []
   );
   const currentWeekStart = useMemo(
@@ -358,9 +491,109 @@ function DashboardContent() {
   );
   const visibleWeekStarts = useMemo(
     () =>
-      monthWeekStarts.filter((weekStart) => weekStart <= currentWeekStart),
-    [monthWeekStarts, currentWeekStart]
+      yearWeekStarts.filter((weekStart) => weekStart <= currentWeekStart),
+    [yearWeekStarts, currentWeekStart]
   );
+  const reviewTopicGroups = useMemo<ReviewTopicGroup[]>(() => {
+    const topicMap = new Map<string, QuizReviewItem[]>();
+    reviewSessions.forEach((session) => {
+      session.items.forEach((item) => {
+        const existing = topicMap.get(item.primaryTopic) ?? [];
+        existing.push(item);
+        topicMap.set(item.primaryTopic, existing);
+      });
+    });
+
+    return Array.from(topicMap.entries())
+      .map(([topic, items]) => ({
+        topic,
+        items: [...items].sort((left, right) => {
+          if (right.completedAt !== left.completedAt) {
+            return right.completedAt.localeCompare(left.completedAt);
+          }
+          return left.prompt.localeCompare(right.prompt);
+        }),
+      }))
+      .sort((left, right) => {
+        if (right.items.length !== left.items.length) {
+          return right.items.length - left.items.length;
+        }
+        return left.topic.localeCompare(right.topic);
+      });
+  }, [reviewSessions]);
+  const totalVisibleReviewItems = useMemo(
+    () => reviewTopicGroups.reduce((sum, group) => sum + group.items.length, 0),
+    [reviewTopicGroups]
+  );
+  const expandedReviewItemCount = useMemo(
+    () =>
+      reviewTopicGroups.reduce(
+        (sum, group) =>
+          sum + (expandedReviewTopics[group.topic] ? group.items.length : 0),
+        0
+      ),
+    [expandedReviewTopics, reviewTopicGroups]
+  );
+  const expandedReviewTopicCount = useMemo(
+    () =>
+      reviewTopicGroups.filter((group) => expandedReviewTopics[group.topic]).length,
+    [expandedReviewTopics, reviewTopicGroups]
+  );
+  const hasVisibleReviewItems = reviewTopicGroups.length > 0;
+
+  useEffect(() => {
+    setExpandedReviewTopics((prev) => {
+      if (reviewTopicGroups.length === 0) {
+        return Object.keys(prev).length === 0 ? prev : {};
+      }
+
+      const next: Record<string, boolean> = {};
+      let changed = false;
+      const hadExpandedTopic = Object.values(prev).some(Boolean);
+
+      reviewTopicGroups.forEach((group) => {
+        if (Object.prototype.hasOwnProperty.call(prev, group.topic)) {
+          next[group.topic] = prev[group.topic];
+        } else {
+          next[group.topic] = false;
+          changed = true;
+        }
+      });
+
+      Object.keys(prev).forEach((topic) => {
+        if (!reviewTopicGroups.some((group) => group.topic === topic)) {
+          changed = true;
+        }
+      });
+
+      const hasExpandedTopic = Object.values(next).some(Boolean);
+      if ((!hasExpandedTopic && hadExpandedTopic) || Object.keys(prev).length === 0) {
+        next[reviewTopicGroups[0].topic] = true;
+        if (prev[reviewTopicGroups[0].topic] !== true) {
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [reviewTopicGroups]);
+
+  const toggleReviewTopic = useCallback((topic: string) => {
+    setExpandedReviewTopics((prev) => ({
+      ...prev,
+      [topic]: !(prev[topic] ?? false),
+    }));
+  }, []);
+  const expandAllReviewTopics = useCallback(() => {
+    setExpandedReviewTopics(
+      Object.fromEntries(reviewTopicGroups.map((group) => [group.topic, true]))
+    );
+  }, [reviewTopicGroups]);
+  const collapseAllReviewTopics = useCallback(() => {
+    setExpandedReviewTopics(
+      Object.fromEntries(reviewTopicGroups.map((group) => [group.topic, false]))
+    );
+  }, [reviewTopicGroups]);
 
   const handleSelect = (questionId: string, choiceIndex: number) => {
     setAnswers((prev) => ({ ...prev, [questionId]: choiceIndex }));
@@ -856,6 +1089,7 @@ function DashboardContent() {
         <div className="mt-6 flex w-full flex-wrap items-center gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-1 sm:mt-8 sm:rounded-full">
           {[
             { id: "questions", label: "Questions" },
+            { id: "review", label: "Review mistakes" },
             { id: "preferences", label: "Preferences" },
             { id: "leaderboard", label: "Leaderboard" },
             { id: "pvp", label: "PvP" },
@@ -868,6 +1102,7 @@ function DashboardContent() {
                 setActiveTab(
                   tab.id as
                     | "questions"
+                    | "review"
                     | "preferences"
                     | "leaderboard"
                     | "pvp"
@@ -1116,6 +1351,287 @@ function DashboardContent() {
               )}
             </section>
           </>
+        ) : activeTab === "review" ? (
+          <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Review mistakes</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  Grouped by primary topic so you can work through mistakes without scrolling through every session.
+                </p>
+              </div>
+              <button
+                className="inline-flex items-center gap-2 self-start rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200"
+                type="button"
+                onClick={() => loadReviewSessions()}
+                disabled={reviewLoading || reviewLoadingMore}
+                aria-busy={reviewLoading || reviewLoadingMore}
+              >
+                {reviewLoading ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-transparent dark:border-slate-400 dark:border-t-transparent" />
+                ) : null}
+                Refresh
+              </button>
+            </div>
+
+            {!reviewLoading && !reviewError ? (
+              <>
+                <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    {
+                      label: "Topics in queue",
+                      value: reviewTopicGroups.length,
+                    },
+                    {
+                      label: "Visible mistakes",
+                      value: totalVisibleReviewItems,
+                    },
+                    {
+                      label: "Expanded now",
+                      value: expandedReviewItemCount,
+                    },
+                    {
+                      label: "Reviewed this visit",
+                      value: reviewedThisVisitCount,
+                    },
+                  ].map((stat) => (
+                    <div
+                      key={stat.label}
+                      className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4"
+                    >
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                        {stat.label}
+                      </p>
+                      <p className="mt-2 text-2xl font-semibold text-slate-900 dark:text-slate-100">
+                        {stat.value}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {hasVisibleReviewItems ? (
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={expandAllReviewTopics}
+                      className="rounded-full border border-[color:var(--border)] px-4 py-2 text-xs font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                    >
+                      Expand all topics
+                    </button>
+                    <button
+                      type="button"
+                      onClick={collapseAllReviewTopics}
+                      className="rounded-full border border-[color:var(--border)] px-4 py-2 text-xs font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                    >
+                      Collapse all topics
+                    </button>
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {expandedReviewTopicCount} of {reviewTopicGroups.length} topic
+                      {reviewTopicGroups.length === 1 ? "" : "s"} open
+                    </span>
+                  </div>
+                ) : null}
+
+                {reviewedThisVisitCount > 0 ? (
+                  <div className="mt-4 rounded-2xl border border-emerald-400/40 bg-emerald-400/10 px-4 py-4 text-sm text-emerald-800 dark:text-emerald-200">
+                    You have cleared {reviewedThisVisitCount} mistake
+                    {reviewedThisVisitCount === 1 ? "" : "s"} in this session.
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+
+            {reviewLoading ? (
+              <p className="mt-6 text-sm text-slate-500 dark:text-slate-400">
+                Loading review sessions...
+              </p>
+            ) : reviewError ? (
+              <p className="mt-6 text-sm text-rose-700 dark:text-rose-200">
+                {reviewError}
+              </p>
+            ) : (
+              <div className="mt-6 space-y-4">
+                {!hasVisibleReviewItems ? (
+                  <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-5 text-sm text-slate-600 dark:text-slate-300">
+                    {reviewNextCursor
+                      ? "You cleared the currently loaded mistakes. Load older sessions to continue reviewing."
+                      : "You are all caught up. Missed questions from recent quizzes will show up here."}
+                    {reviewedThisVisitCount > 0 ? (
+                      <p className="mt-2 text-emerald-700 dark:text-emerald-200">
+                        Nice work. You reviewed {reviewedThisVisitCount} mistake
+                        {reviewedThisVisitCount === 1 ? "" : "s"} this visit.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  reviewTopicGroups.map((group) => {
+                    const isExpanded = expandedReviewTopics[group.topic] ?? false;
+                    return (
+                      <section
+                        key={group.topic}
+                        className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)]"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleReviewTopic(group.topic)}
+                          className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left sm:px-5"
+                          aria-expanded={isExpanded}
+                        >
+                          <div>
+                            <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                              Topic review
+                            </p>
+                            <h3 className="mt-1 text-base font-medium text-slate-900 dark:text-slate-100">
+                              {group.topic}
+                            </h3>
+                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              Latest mistake from {formatDateKey(group.items[0].dateKey)}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="rounded-full border border-rose-400/40 bg-rose-400/10 px-3 py-1 text-xs font-semibold text-rose-700 dark:text-rose-200">
+                              {group.items.length} mistake
+                              {group.items.length === 1 ? "" : "s"}
+                            </span>
+                            <span className="text-xs text-slate-500 dark:text-slate-400">
+                              {isExpanded ? "Hide" : "Show"}
+                            </span>
+                          </div>
+                        </button>
+
+                        {isExpanded ? (
+                          <div className="space-y-4 border-t border-[color:var(--border)] px-4 py-4 sm:px-5">
+                            {group.items.map((item) => {
+                              const isMutating = Boolean(reviewMutatingIds[item.id]);
+                              return (
+                                <article
+                                  key={item.id}
+                                  className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-5"
+                                >
+                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                                        Missed on {formatDateKey(item.dateKey)}
+                                      </p>
+                                      <h4 className="mt-2 text-base font-medium text-slate-900 dark:text-slate-100">
+                                        {item.prompt}
+                                      </h4>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => markReviewItem(item.id)}
+                                      disabled={isMutating}
+                                      className="rounded-full border border-[color:var(--border)] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200"
+                                    >
+                                      {isMutating ? "Saving..." : "Mark reviewed"}
+                                    </button>
+                                  </div>
+
+                                  {item.topics.length > 0 ? (
+                                    <div className="mt-4 flex flex-wrap gap-2">
+                                      {item.topics.map((topic) => (
+                                        <span
+                                          key={`${item.id}-${topic}`}
+                                          className={`rounded-full border px-3 py-1 text-xs ${
+                                            topic === item.primaryTopic
+                                              ? "border-sky-400/40 bg-sky-400/10 text-sky-700 dark:text-sky-200"
+                                              : "border-[color:var(--border)] bg-[color:var(--surface-muted)] text-slate-600 dark:text-slate-300"
+                                          }`}
+                                        >
+                                          {topic}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <div className="mt-4">
+                                      <span className="rounded-full border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-3 py-1 text-xs text-slate-600 dark:text-slate-300">
+                                        Uncategorized
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  <div className="mt-4 grid gap-2 text-sm">
+                                    {item.choices.map((choice, choiceIndex) => {
+                                      const isCorrect =
+                                        choiceIndex === item.correctAnswerIndex;
+                                      const isSelected =
+                                        choiceIndex === item.selectedAnswerIndex;
+                                      const badge = isCorrect
+                                        ? "Correct"
+                                        : isSelected
+                                        ? "Your answer"
+                                        : null;
+
+                                      return (
+                                        <div
+                                          key={`${item.id}-${choiceIndex}`}
+                                          className={`rounded-xl border px-4 py-3 ${
+                                            isCorrect
+                                              ? "border-emerald-400/60 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200"
+                                              : isSelected
+                                              ? "border-rose-400/60 bg-rose-400/10 text-rose-700 dark:text-rose-200"
+                                              : "border-[color:var(--border)] bg-[color:var(--surface)] text-slate-700 dark:text-slate-200"
+                                          }`}
+                                        >
+                                          <div className="flex items-center justify-between gap-3">
+                                            <span>{choice}</span>
+                                            {badge ? (
+                                              <span className="text-[11px] font-semibold uppercase tracking-wide">
+                                                {badge}
+                                              </span>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+
+                                  <div className="mt-4 grid gap-2 text-sm text-slate-600 dark:text-slate-300 sm:grid-cols-2">
+                                    <p>
+                                      <span className="font-semibold text-slate-900 dark:text-slate-100">
+                                        Your answer:
+                                      </span>{" "}
+                                      {item.selectedAnswer ?? "No recorded answer"}
+                                    </p>
+                                    <p>
+                                      <span className="font-semibold text-slate-900 dark:text-slate-100">
+                                        Correct answer:
+                                      </span>{" "}
+                                      {item.correctAnswer}
+                                    </p>
+                                  </div>
+                                  <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">
+                                    Explanation: {item.explanation}
+                                  </p>
+                                </article>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </section>
+                    );
+                  })
+                )}
+
+                <div className="flex flex-col items-start gap-3">
+                  {reviewNextCursor ? (
+                    <button
+                      type="button"
+                      onClick={() => loadReviewSessions({ append: true })}
+                      disabled={reviewLoadingMore}
+                      className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200"
+                    >
+                      {reviewLoadingMore ? "Loading older sessions..." : "Load older sessions"}
+                    </button>
+                  ) : (
+                    <p className="text-sm text-slate-500 dark:text-slate-400">
+                      You have reached the end of your review history.
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+          </section>
         ) : activeTab === "preferences" ? (
           <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">

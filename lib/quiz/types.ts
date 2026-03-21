@@ -24,6 +24,37 @@ export type QuizResult = {
   completedAt: string;
 };
 
+export type QuizReviewItem = {
+  id: string;
+  dateKey: string;
+  completedAt: string;
+  questionId: string;
+  primaryTopic: string;
+  prompt: string;
+  choices: string[];
+  selectedAnswerIndex: number | null;
+  selectedAnswer: string | null;
+  correctAnswerIndex: number;
+  correctAnswer: string;
+  explanation: string;
+  topics: string[];
+};
+
+export type QuizReviewSession = {
+  id: string;
+  dateKey: string;
+  completedAt: string;
+  score: number;
+  total: number;
+  mistakeCount: number;
+  items: QuizReviewItem[];
+};
+
+export type ReviewedMistake = {
+  itemId: string;
+  reviewedAt: string | null;
+};
+
 export type TopicSchedule = {
   dateKey: string;
   topics: string[];
