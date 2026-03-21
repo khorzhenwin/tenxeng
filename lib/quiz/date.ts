@@ -93,3 +93,23 @@ export function getMonthWeekStarts(timezone: string, date = new Date()) {
 
   return weekStarts;
 }
+
+export function getYearWeekStartsUntilDate(timezone: string, date = new Date()) {
+  const { year } = getDatePartsForTimezone(timezone, date);
+  const firstDayOfYear = new Date(Date.UTC(year, 0, 1, 12));
+  const currentWeekStartKey = getWeekStartDateKey(timezone, date);
+  const firstWeekStartKey = getWeekStartDateKey(timezone, firstDayOfYear);
+  const weekStarts: string[] = [];
+
+  let cursor = parseDateKeyToDate(firstWeekStartKey);
+  while (true) {
+    const weekStartKey = getDateKeyForTimezone(timezone, cursor);
+    if (weekStartKey > currentWeekStartKey) {
+      break;
+    }
+    weekStarts.push(weekStartKey);
+    cursor = addDays(cursor, 7);
+  }
+
+  return weekStarts;
+}

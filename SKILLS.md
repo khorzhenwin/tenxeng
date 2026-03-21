@@ -20,6 +20,9 @@ This file is the repo-level canonical source for agent skills used across:
 3. `integration-standards`
 4. `integration-testing`
 5. `project-layout`
+6. `product-manager`
+7. `fullstack-engineer`
+8. `qa-engineer`
 
 ## File Mapping
 
@@ -47,6 +50,21 @@ This file is the repo-level canonical source for agent skills used across:
   - Cursor: `.cursor/skills/project-layout/SKILL.md`
   - Claude: `.claude/skills/project-layout/SKILL.md`
   - Antigravity: `.antigravity/skills/project-layout.md`
+
+- `product-manager`
+  - Cursor: `.cursor/skills/product-manager/SKILL.md`
+  - Claude: `.claude/skills/product-manager/SKILL.md`
+  - Antigravity: `.antigravity/skills/product-manager.md`
+
+- `fullstack-engineer`
+  - Cursor: `.cursor/skills/fullstack-engineer/SKILL.md`
+  - Claude: `.claude/skills/fullstack-engineer/SKILL.md`
+  - Antigravity: `.antigravity/skills/fullstack-engineer.md`
+
+- `qa-engineer`
+  - Cursor: `.cursor/skills/qa-engineer/SKILL.md`
+  - Claude: `.claude/skills/qa-engineer/SKILL.md`
+  - Antigravity: `.antigravity/skills/qa-engineer.md`
 
 ## Maintenance Checklist
 

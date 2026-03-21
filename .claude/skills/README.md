@@ -8,3 +8,6 @@ Canonical registry and sync rules: `SKILLS.md`
 - `integration-standards/SKILL.md`
 - `integration-testing/SKILL.md`
 - `project-layout/SKILL.md`
+- `product-manager/SKILL.md`
+- `fullstack-engineer/SKILL.md`
+- `qa-engineer/SKILL.md`

@@ -137,6 +137,9 @@ Requirements:
 - Java Runtime (for Firestore emulator)
 - Node + npm
 
+`npm run test:integration` now auto-discovers `JAVA_HOME` on macOS via
+`/usr/libexec/java_home` when a JDK is installed but `JAVA_HOME` is not set.
+
 Run:
 
 ```bash

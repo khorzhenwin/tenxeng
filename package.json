@@ -7,7 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
-    "test:integration": "FIREBASE_PROJECT_ID=demo-tenxeng FIREBASE_CLIENT_EMAIL=test@example.com ./node_modules/.bin/firebase emulators:exec --only firestore --project demo-tenxeng \"vitest run tests/integration\""
+    "test:integration": "./scripts/run-integration-tests.sh"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
