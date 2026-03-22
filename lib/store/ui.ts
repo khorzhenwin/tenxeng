@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 type DashboardTab =
   | "questions"
+  | "trends"
   | "practice"
   | "review"
   | "preferences"
@@ -39,12 +40,13 @@ export const useUiStore = create<UiState>()(
     }),
     {
       name: "tenxeng-ui",
-      version: 5,
+      version: 7,
       migrate: (state) => {
         const data = (state as PersistedUiState | undefined) ?? {};
         const allowed = new Set([10, 25, 50]);
         const allowedTabs = new Set([
           "questions",
+          "trends",
           "practice",
           "review",
           "preferences",
@@ -54,7 +56,12 @@ export const useUiStore = create<UiState>()(
           "social",
         ]);
         const activeTab = data.activeTab ?? "questions";
-        const migratedTab = activeTab === "statistics" ? "profile" : activeTab;
+        const migratedTab =
+          activeTab === "statistics"
+            ? "profile"
+            : activeTab === "due"
+            ? "trends"
+            : activeTab;
         const leaderboardLimit = data.leaderboardLimit;
         return {
           ...data,

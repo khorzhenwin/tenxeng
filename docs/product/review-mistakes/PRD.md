@@ -6,7 +6,7 @@ TenXEng stores quiz explanations and the user's selected answers, but missed que
 
 ## Goal
 
-Turn wrong answers into a reusable review loop that improves learning retention without changing quiz generation, streaks, or leaderboard behavior.
+Turn wrong answers into a recent mistake inbox that improves learning retention without changing quiz generation, streaks, or leaderboard behavior.
 
 ## Target User
 
@@ -18,7 +18,7 @@ As a learner, I want a dedicated place to review the questions I missed so I can
 
 ## MVP Scope
 
-- Add a dedicated `Review mistakes` experience inside the dashboard.
+- Add a dedicated `Mistake inbox` experience inside the dashboard.
 - Show only incorrectly answered questions from recent completed quizzes.
 - Group review content by completed quiz session and let users load older sessions.
 - Compress the visible queue into collapsible sections grouped by one primary topic per mistake.
@@ -33,6 +33,9 @@ As a learner, I want a dedicated place to review the questions I missed so I can
   - topics when available
 - Use existing `quizResults` and `dailyQuizzes` data only.
 - Support loading, empty, and error states.
+- Keep this surface clearly distinct from `Progress trends`:
+  - `Mistake inbox` is for browsing and clearing recent misses
+  - `Progress trends` is for tracking improvement over time
 
 ## Out Of Scope
 
@@ -45,13 +48,14 @@ As a learner, I want a dedicated place to review the questions I missed so I can
 
 ## Acceptance Criteria
 
-- A signed-in user can open a `Review mistakes` surface from the dashboard.
+- A signed-in user can open a `Mistake inbox` surface from the dashboard.
 - The review list contains only questions the user answered incorrectly.
 - Each review item shows the user's answer, the correct answer, and the explanation.
 - Review items are ordered from most recent quiz activity to older activity.
 - Older review sessions can be loaded without losing the current page of review content.
 - Visible review items are grouped into collapsible primary-topic sections.
 - A user can mark an individual mistake as reviewed and it stays hidden after refresh and future sessions.
+- The UI makes it clear that clearing an inbox item only affects the inbox view and does not erase the user’s historical performance trends.
 - If the user has no wrong answers in the scanned history window, the UI shows a clear empty state.
 - The feature works from existing stored quiz data with no backfill job.
 

@@ -28,6 +28,7 @@ competitive PvP modes (live + async), and Messenger-style chat.
 
 ### Quiz and Learning
 - Daily AI-generated system design quiz (5 MCQs + explanations).
+- Progress trends for recent quiz accuracy, practice cadence, and weak-topic signals.
 - On-demand adaptive practice drills from weak topics or recent mistakes.
 - Topic defaults + per-day topic scheduling.
 - Embedding-based novelty filtering to reduce repeated question prompts.
@@ -131,9 +132,9 @@ Open `http://localhost:3000`.
 
 ## Testing
 
-Integration tests cover chat, friend requests, review flow, adaptive practice,
-sync PvP, async PvP happy paths, and polling rate-limiter behavior (including
-`__rateLimits` writes).
+Integration tests cover chat, friend requests, review flow, progress trends,
+adaptive practice, sync PvP, async PvP happy paths, and polling rate-limiter
+behavior (including `__rateLimits` writes).
 
 Requirements:
 - Java Runtime (for Firestore emulator)

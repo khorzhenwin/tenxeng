@@ -2,7 +2,7 @@
 
 ## Objective
 
-Ship a first vertical slice that derives missed-question review cards from existing quiz result data and surfaces them in the dashboard.
+Ship a first vertical slice that derives missed-question review cards from existing quiz result data and surfaces them as a recent mistake inbox in the dashboard.
 
 ## Planned Touchpoints
 
@@ -81,15 +81,16 @@ Request body:
 
 ## UI Notes
 
-- Add a `Review mistakes` tab to the dashboard navigation.
+- Add a `Mistake inbox` tab to the dashboard navigation.
 - Load review sessions only when the review tab is active.
 - Support `Load older sessions` pagination in the dashboard UI.
 - Flatten visible items into collapsible primary-topic sections for a more compact review queue.
-- Add a `Mark reviewed` action on each mistake card and remove it from the visible queue after success.
+- Add a `Clear from inbox` action on each mistake card and remove it from the visible queue after success.
 - Reuse the current visual language from quiz history cards:
   - green for correct answer
   - rose for the user's wrong answer
 - Provide loading, empty, and error states.
+- Add copy that explicitly distinguishes the recent inbox from the performance-oriented `Progress trends` view.
 - Keep v1 focused on review only; no retry, regenerate, note-taking, or undo flow.
 
 ## Non-Goals

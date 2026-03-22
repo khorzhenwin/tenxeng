@@ -2,7 +2,7 @@
 
 ## Scope
 
-Validate that the new review workflow correctly exposes missed quiz questions without regressing the existing daily quiz experience.
+Validate that the new review workflow correctly exposes missed quiz questions as a recent inbox without regressing the existing daily quiz experience.
 
 ## Primary Checks
 
@@ -16,6 +16,7 @@ Validate that the new review workflow correctly exposes missed quiz questions wi
 - Items are ordered from newer quiz activity to older activity.
 - Loading older sessions appends the next page in descending date order.
 - Visible review items are grouped into collapsible topic sections.
+- The UI makes it clear that this surface is the recent mistake inbox, while `Progress trends` handles historical improvement signals.
 
 3. Reviewed-state persistence
 - Marking an individual item as reviewed removes it from the default queue.
@@ -31,7 +32,7 @@ Validate that the new review workflow correctly exposes missed quiz questions wi
 
 ## Regression Focus
 
-- Existing `Questions`, `Preferences`, `Leaderboard`, `PvP`, `Social`, and `My Profile` tabs still render.
+- Existing `Questions`, `Progress trends`, `Preferences`, `Leaderboard`, `PvP`, `Social`, and `My Profile` tabs still render.
 - Daily quiz submission flow is unchanged.
 - Existing review data remains user-scoped and does not leak across accounts.
 
@@ -50,11 +51,12 @@ Validate that the new review workflow correctly exposes missed quiz questions wi
 ## Manual Verification
 
 - Complete at least one quiz with a wrong answer.
-- Open `Review mistakes` and verify the queue is grouped into topic sections.
+- Open `Mistake inbox` and verify the queue is grouped into topic sections.
 - Expand a topic section and verify the incorrect choice is highlighted separately from the correct choice.
-- Mark an item reviewed and verify it disappears immediately.
+- Clear an item from the inbox and verify it disappears immediately.
 - Refresh and verify the reviewed item stays hidden.
 - Verify the explanation matches the stored question.
+- Verify the page copy makes the difference between `Mistake inbox` and `Progress trends` obvious.
 - Verify users with no mistakes see the empty state copy.
 
 ## Ship Criteria
