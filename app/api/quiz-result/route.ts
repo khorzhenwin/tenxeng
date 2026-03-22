@@ -8,6 +8,7 @@ import {
   getWeekStartDateKey,
   parseDateKeyToDate,
 } from "@/lib/quiz/date";
+import type { DailyQuiz } from "@/lib/quiz/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,9 +37,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const quiz = quizSnap.data() as {
-    questions: { id: string; answerIndex: number }[];
-  };
+  const quiz = quizSnap.data() as DailyQuiz;
   const total = quiz.questions.length;
   const score = quiz.questions.filter(
     (question) =>

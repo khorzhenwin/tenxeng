@@ -23,6 +23,7 @@ This file is the repo-level canonical source for agent skills used across:
 6. `product-manager`
 7. `fullstack-engineer`
 8. `qa-engineer`
+9. `product-market-fit-validator`
 
 ## File Mapping
 
@@ -65,6 +66,11 @@ This file is the repo-level canonical source for agent skills used across:
   - Cursor: `.cursor/skills/qa-engineer/SKILL.md`
   - Claude: `.claude/skills/qa-engineer/SKILL.md`
   - Antigravity: `.antigravity/skills/qa-engineer.md`
+
+- `product-market-fit-validator`
+  - Cursor: `.cursor/skills/product-market-fit-validator/SKILL.md`
+  - Claude: `.claude/skills/product-market-fit-validator/SKILL.md`
+  - Antigravity: `.antigravity/skills/product-market-fit-validator.md`
 
 ## Maintenance Checklist
 

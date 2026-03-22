@@ -24,7 +24,9 @@ export type QuizResult = {
   completedAt: string;
 };
 
-export type PracticeSourceType = "weak-topics" | "recent-mistakes";
+export type PracticeSourceType =
+  | "weak-topics"
+  | "recent-mistakes";
 
 export type PracticeSessionStatus = "ready" | "completed";
 
@@ -70,6 +72,43 @@ export type QuizReviewSession = {
 export type ReviewedMistake = {
   itemId: string;
   reviewedAt: string | null;
+};
+
+export type WeakTopicSignal = {
+  topic: string;
+  accuracy: number;
+  total: number;
+  wrong: number;
+  latestCompletedAt: string;
+};
+
+export type QuizTrendPoint = {
+  dateKey: string;
+  score: number;
+  total: number;
+  accuracy: number;
+  completedAt: string;
+};
+
+export type PracticeTrendPoint = {
+  dateKey: string;
+  completedCount: number;
+  averageAccuracy: number;
+  totalQuestions: number;
+};
+
+export type ProgressTrendsSummary = {
+  completedQuizzes: number;
+  completedPracticeSessions: number;
+  averageQuizAccuracy: number | null;
+  averagePracticeAccuracy: number | null;
+};
+
+export type ProgressTrendsPayload = {
+  summary: ProgressTrendsSummary;
+  quizSeries: QuizTrendPoint[];
+  practiceSeries: PracticeTrendPoint[];
+  weakTopics: WeakTopicSignal[];
 };
 
 export type TopicSchedule = {

@@ -9,5 +9,6 @@ Canonical registry and sync rules: `SKILLS.md`
 - `integration-testing.md`
 - `project-layout.md`
 - `product-manager.md`
+- `product-market-fit-validator.md`
 - `fullstack-engineer.md`
 - `qa-engineer.md`

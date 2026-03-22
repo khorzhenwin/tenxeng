@@ -60,7 +60,7 @@ function buildReviewItem(
   };
 }
 
-function getWrongAnswerItems(
+export function getWrongAnswerItems(
   result: QuizResult,
   quiz: DailyQuiz
 ): QuizReviewItem[] {
@@ -76,6 +76,35 @@ function getWrongAnswerItems(
 
     return [buildReviewItem(result, question, selectedAnswerIndex)];
   });
+}
+
+export async function getQuizReviewItem(uid: string, itemId: string) {
+  const separatorIndex = itemId.indexOf(":");
+  if (separatorIndex <= 0) {
+    return null;
+  }
+
+  const dateKey = itemId.slice(0, separatorIndex);
+  const questionId = itemId.slice(separatorIndex + 1);
+  if (!dateKey || !questionId) {
+    return null;
+  }
+
+  const userRef = adminDb.collection("users").doc(uid);
+  const [resultSnap, quizSnap] = await Promise.all([
+    userRef.collection("quizResults").doc(dateKey).get(),
+    userRef.collection("dailyQuizzes").doc(dateKey).get(),
+  ]);
+  if (!resultSnap.exists || !quizSnap.exists) {
+    return null;
+  }
+
+  const result = resultSnap.data() as QuizResult;
+  const quiz = quizSnap.data() as DailyQuiz;
+  return (
+    getWrongAnswerItems(result, quiz).find((item) => item.questionId === questionId) ??
+    null
+  );
 }
 
 function buildReviewSession(
@@ -103,7 +132,7 @@ function buildReviewSession(
 
 export async function getQuizReviewSessions(
   uid: string,
-  options?: { limit?: number; cursor?: string | null }
+  options?: { limit?: number; cursor?: string | null; includeReviewed?: boolean }
 ): Promise<{ sessions: QuizReviewSession[]; nextCursor: string | null }> {
   const pageLimit = Math.max(
     1,
@@ -111,7 +140,9 @@ export async function getQuizReviewSessions(
   );
   const batchLimit = Math.max(10, Math.min(40, pageLimit * 3));
   const userRef = adminDb.collection("users").doc(uid);
-  const reviewedMistakeIds = await getReviewedMistakeIds(uid);
+  const reviewedMistakeIds = options?.includeReviewed
+    ? new Set<string>()
+    : await getReviewedMistakeIds(uid);
 
   let cursor = options?.cursor ?? null;
   let scannedCount = 0;

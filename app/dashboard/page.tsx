@@ -26,9 +26,11 @@ import type {
   DailyQuiz,
   PracticeSession,
   PracticeSourceType,
+  ProgressTrendsPayload,
   QuizResult,
   QuizReviewItem,
   QuizReviewSession,
+  WeakTopicSignal,
 } from "@/lib/quiz/types";
 import {
   getDateKeyForTimezone,
@@ -82,6 +84,18 @@ type ReviewTopicGroup = {
   items: QuizReviewItem[];
 };
 
+const EMPTY_PROGRESS_TRENDS: ProgressTrendsPayload = {
+  summary: {
+    completedQuizzes: 0,
+    completedPracticeSessions: 0,
+    averageQuizAccuracy: null,
+    averagePracticeAccuracy: null,
+  },
+  quizSeries: [],
+  practiceSeries: [],
+  weakTopics: [],
+};
+
 const DEFAULT_TOPICS = [
   "Caching",
   "Load balancing",
@@ -111,6 +125,11 @@ function DashboardContent() {
   const [submitted, setSubmitted] = useState(false);
   const [score, setScore] = useState<number | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [progressTrends, setProgressTrends] =
+    useState<ProgressTrendsPayload>(EMPTY_PROGRESS_TRENDS);
+  const [trendsInitialized, setTrendsInitialized] = useState(false);
+  const [trendsLoading, setTrendsLoading] = useState(false);
+  const [trendsError, setTrendsError] = useState<string | null>(null);
   const [practiceSessions, setPracticeSessions] = useState<PracticeSession[]>([]);
   const [practiceSession, setPracticeSession] = useState<PracticeSession | null>(null);
   const [practiceLoading, setPracticeLoading] = useState(false);
@@ -262,6 +281,36 @@ function DashboardContent() {
     setHistory(results);
   }, [user]);
 
+  const loadProgressTrends = useCallback(async () => {
+    if (!user) return;
+    setTrendsLoading(true);
+    setTrendsError(null);
+    try {
+      const response = await fetch("/api/progress-trends");
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(payload?.error ?? "Unable to load progress trends.");
+      }
+
+      const data = (await response.json()) as ProgressTrendsPayload;
+      setProgressTrends({
+        summary: data.summary ?? EMPTY_PROGRESS_TRENDS.summary,
+        quizSeries: Array.isArray(data.quizSeries) ? data.quizSeries : [],
+        practiceSeries: Array.isArray(data.practiceSeries) ? data.practiceSeries : [],
+        weakTopics: Array.isArray(data.weakTopics) ? data.weakTopics : [],
+      });
+      setTrendsInitialized(true);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to load progress trends.";
+      setTrendsError(message);
+    } finally {
+      setTrendsLoading(false);
+    }
+  }, [user]);
+
   const loadPracticeSessions = useCallback(async () => {
     if (!user) return;
     setPracticeLoading(true);
@@ -294,7 +343,10 @@ function DashboardContent() {
   }, [user]);
 
   const startPracticeSession = useCallback(
-    async (sourceType: PracticeSourceType) => {
+    async (
+      sourceType: PracticeSourceType,
+      options?: { activatePracticeTab?: boolean }
+    ) => {
       setPracticeError(null);
       setPracticeSubmitError(null);
       setPracticeCreatingSource(sourceType);
@@ -319,6 +371,9 @@ function DashboardContent() {
           ...prev.filter((session) => session.id !== data.session.id),
         ]);
         setExpandedPracticeSessionId(data.session.id);
+        if (options?.activatePracticeTab) {
+          setActiveTab("practice");
+        }
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unable to start practice drill.";
@@ -327,7 +382,7 @@ function DashboardContent() {
         setPracticeCreatingSource(null);
       }
     },
-    []
+    [setActiveTab]
   );
 
   const submitPracticeSession = useCallback(async () => {
@@ -359,6 +414,9 @@ function DashboardContent() {
         data.session,
         ...prev.filter((session) => session.id !== data.session.id),
       ]);
+      if (trendsInitialized) {
+        await loadProgressTrends();
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unable to submit practice drill.";
@@ -366,7 +424,7 @@ function DashboardContent() {
     } finally {
       setPracticeSubmitting(false);
     }
-  }, [practiceAnswers, practiceSession]);
+  }, [loadProgressTrends, practiceAnswers, practiceSession, trendsInitialized]);
 
   const loadReviewSessions = useCallback(async (options?: { append?: boolean }) => {
     if (!user) return;
@@ -503,6 +561,9 @@ function DashboardContent() {
 
   useEffect(() => {
     if (!user) {
+      setProgressTrends(EMPTY_PROGRESS_TRENDS);
+      setTrendsInitialized(false);
+      setTrendsError(null);
       setPracticeSessions([]);
       setPracticeSession(null);
       setPracticeError(null);
@@ -516,6 +577,21 @@ function DashboardContent() {
       setReviewedThisVisitCount(0);
       setReviewMutatingIds({});
       setExpandedReviewTopics({});
+      return;
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    if (activeTab !== "trends") return;
+    if (trendsInitialized || trendsLoading) return;
+    void loadProgressTrends();
+  }, [activeTab, loadProgressTrends, trendsInitialized, trendsLoading, user]);
+
+  useEffect(() => {
+    if (!user) {
       return;
     }
     if (activeTab !== "review") return;
@@ -642,6 +718,11 @@ function DashboardContent() {
     practiceSession?.status === "completed"
       ? practiceSession.selectedAnswers
       : practiceAnswers;
+  const hasProgressTrendData =
+    progressTrends.quizSeries.length > 0 ||
+    progressTrends.practiceSeries.length > 0 ||
+    progressTrends.weakTopics.length > 0;
+  const isProgressTrendsFirstLoad = trendsLoading && !trendsInitialized;
   const reviewTopicGroups = useMemo<ReviewTopicGroup[]>(() => {
     const topicMap = new Map<string, QuizReviewItem[]>();
     reviewSessions.forEach((session) => {
@@ -772,6 +853,9 @@ function DashboardContent() {
       setScore(data.score);
       setSubmitted(true);
       await fetchHistory();
+      if (trendsInitialized) {
+        await loadProgressTrends();
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unable to submit answers.";
@@ -787,14 +871,27 @@ function DashboardContent() {
   }
 
   function formatPracticeSource(sourceType: PracticeSourceType) {
-    return sourceType === "weak-topics"
-      ? "Practice weak topics"
-      : "Practice recent mistakes";
+    if (sourceType === "weak-topics") {
+      return "Practice weak topics";
+    }
+    return "Practice recent mistakes";
   }
 
   function formatTimestamp(value: string | null) {
     if (!value) return "—";
     return new Date(value).toLocaleString();
+  }
+
+  function formatPercent(value: number | null | undefined) {
+    if (typeof value !== "number" || Number.isNaN(value)) {
+      return "—";
+    }
+    return `${Math.round(value * 100)}%`;
+  }
+
+  function getTopicBarWidth(signal: WeakTopicSignal) {
+    const pressure = signal.wrong * 0.12 + (1 - signal.accuracy);
+    return `${Math.max(18, Math.min(100, Math.round(pressure * 100)))}%`;
   }
 
   const loadHistoryQuiz = async (dateKey: string) => {
@@ -1210,6 +1307,18 @@ function DashboardContent() {
     router.replace("/login");
   };
 
+  if (loading || !user) {
+    return (
+      <div className="min-h-screen bg-transparent text-[color:var(--foreground)]">
+        <div className="mx-auto flex min-h-screen w-full max-w-5xl items-center justify-center px-4 py-12 sm:px-6">
+          <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] px-5 py-4 text-sm text-slate-500 shadow-sm dark:text-slate-300">
+            Loading dashboard...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-transparent text-[color:var(--foreground)]">
       <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-6 sm:py-12">
@@ -1252,8 +1361,9 @@ function DashboardContent() {
         <div className="mt-6 flex w-full flex-wrap items-center gap-2 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] p-1 sm:mt-8 sm:rounded-full">
           {[
             { id: "questions", label: "Questions" },
+            { id: "trends", label: "Progress trends" },
             { id: "practice", label: "Practice" },
-            { id: "review", label: "Review mistakes" },
+            { id: "review", label: "Mistake inbox" },
             { id: "preferences", label: "Preferences" },
             { id: "leaderboard", label: "Leaderboard" },
             { id: "pvp", label: "PvP" },
@@ -1266,6 +1376,7 @@ function DashboardContent() {
                 setActiveTab(
                   tab.id as
                     | "questions"
+                    | "trends"
                     | "practice"
                     | "review"
                     | "preferences"
@@ -1280,7 +1391,7 @@ function DashboardContent() {
                   : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-100"
               }`}
             >
-              {tab.label}
+              <span>{tab.label}</span>
             </button>
           ))}
         </div>
@@ -1516,6 +1627,309 @@ function DashboardContent() {
               )}
             </section>
           </>
+        ) : activeTab === "trends" ? (
+          <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold">Progress trends</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  See whether quiz accuracy is improving, how often you are practicing, and which topics still need attention.
+                </p>
+              </div>
+              <button
+                className="inline-flex items-center gap-2 self-start rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200"
+                type="button"
+                onClick={() => loadProgressTrends()}
+                disabled={trendsLoading}
+                aria-busy={trendsLoading}
+              >
+                {trendsLoading ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-500 border-t-transparent dark:border-slate-400 dark:border-t-transparent" />
+                ) : null}
+                Refresh
+              </button>
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {isProgressTrendsFirstLoad
+                ? Array.from({ length: 4 }, (_, index) => (
+                    <div
+                      key={`trends-skeleton-${index + 1}`}
+                      className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4"
+                    >
+                      <div className="h-3 w-24 animate-pulse rounded bg-slate-200 dark:bg-slate-800" />
+                      <div className="mt-4 h-8 w-20 animate-pulse rounded bg-slate-200 dark:bg-slate-800" />
+                    </div>
+                  ))
+                : [
+                    {
+                      label: "Quizzes tracked",
+                      value: progressTrends.summary.completedQuizzes,
+                    },
+                    {
+                      label: "Practice sessions",
+                      value: progressTrends.summary.completedPracticeSessions,
+                    },
+                    {
+                      label: "Recent quiz accuracy",
+                      value: formatPercent(progressTrends.summary.averageQuizAccuracy),
+                    },
+                    {
+                      label: "Recent practice accuracy",
+                      value: formatPercent(progressTrends.summary.averagePracticeAccuracy),
+                    },
+                  ].map((stat) => (
+                    <div
+                      key={stat.label}
+                      className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4"
+                    >
+                      <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+                        {stat.label}
+                      </p>
+                      <div className="mt-3 flex items-center justify-between gap-3">
+                        <p className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
+                          {stat.value}
+                        </p>
+                        {trendsLoading && trendsInitialized ? (
+                          <span className="text-xs text-slate-500 dark:text-slate-400">
+                            Updating...
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+            </div>
+
+            {trendsError ? (
+              <p className="mt-6 text-sm text-rose-700 dark:text-rose-200">
+                {trendsError}
+              </p>
+            ) : isProgressTrendsFirstLoad ? (
+              <p className="mt-6 text-sm text-slate-500 dark:text-slate-400">
+                Loading progress trends...
+              </p>
+            ) : !hasProgressTrendData ? (
+              <div className="mt-6 rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-5 text-sm text-slate-600 dark:text-slate-300">
+                <p>
+                  Complete a few quizzes or drills and this area will start showing momentum, practice cadence, and topics that still need work.
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("questions")}
+                    className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                  >
+                    Go to today&apos;s quiz
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("review")}
+                    className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                  >
+                    Open mistake inbox
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("practice")}
+                    className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                  >
+                    Open practice
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-6 space-y-4">
+                <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-4 text-sm text-slate-600 dark:text-slate-300">
+                  Mistake inbox shows what you missed recently. Progress trends shows whether your quiz accuracy and practice habit are improving over time.
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                            Recent quiz accuracy
+                          </h3>
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            Your latest scored quizzes in chronological order.
+                          </p>
+                        </div>
+                        <span className="text-xs text-slate-500 dark:text-slate-400">
+                          {progressTrends.quizSeries.length} results
+                        </span>
+                      </div>
+
+                      <div className="mt-5 space-y-3">
+                        {progressTrends.quizSeries.slice(-8).map((point) => (
+                          <div key={`quiz-${point.dateKey}`} className="space-y-2">
+                            <div className="flex items-center justify-between gap-3 text-sm">
+                              <span className="font-medium text-slate-900 dark:text-slate-100">
+                                {formatDateKey(point.dateKey)}
+                              </span>
+                              <span className="text-slate-500 dark:text-slate-400">
+                                {point.score}/{point.total} correct
+                              </span>
+                            </div>
+                            <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                              <div
+                                className="h-full rounded-full bg-emerald-500"
+                                style={{ width: `${Math.round(point.accuracy * 100)}%` }}
+                              />
+                            </div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              Accuracy {formatPercent(point.accuracy)}
+                            </p>
+                          </div>
+                        ))}
+                        {progressTrends.quizSeries.length === 0 ? (
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            No completed quizzes yet.
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                            Practice cadence
+                          </h3>
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            Track how often you are drilling and how those sessions are landing.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("practice")}
+                          className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                        >
+                          Open practice
+                        </button>
+                      </div>
+
+                      <div className="mt-5 space-y-3">
+                        {progressTrends.practiceSeries.slice(-8).map((point) => (
+                          <div
+                            key={`practice-${point.dateKey}`}
+                            className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-3"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="font-medium text-slate-900 dark:text-slate-100">
+                                  {formatDateKey(point.dateKey)}
+                                </p>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                  {point.completedCount} session{point.completedCount === 1 ? "" : "s"} completed
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                                  {formatPercent(point.averageAccuracy)}
+                                </p>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                  Avg. accuracy
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        {progressTrends.practiceSeries.length === 0 ? (
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            No completed practice sessions yet.
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] p-5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                            Topics needing attention
+                          </h3>
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            A blended view of recent quiz misses and completed practice performance.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("review")}
+                          className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-xs font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                        >
+                          Open mistake inbox
+                        </button>
+                      </div>
+
+                      <div className="mt-5 space-y-3">
+                        {progressTrends.weakTopics.map((signal) => (
+                          <div
+                            key={signal.topic}
+                            className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface)] px-4 py-4"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-medium text-slate-900 dark:text-slate-100">
+                                  {signal.topic}
+                                </p>
+                                <p className="text-xs text-slate-500 dark:text-slate-400">
+                                  {signal.wrong} miss{signal.wrong === 1 ? "" : "es"} across {signal.total} question{signal.total === 1 ? "" : "s"}
+                                </p>
+                              </div>
+                              <p className="text-sm font-semibold text-amber-700 dark:text-amber-300">
+                                {formatPercent(signal.accuracy)}
+                              </p>
+                            </div>
+                            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                              <div
+                                className="h-full rounded-full bg-amber-500"
+                                style={{ width: getTopicBarWidth(signal) }}
+                              />
+                            </div>
+                            <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                              Latest signal {formatTimestamp(signal.latestCompletedAt)}
+                            </p>
+                          </div>
+                        ))}
+                        {progressTrends.weakTopics.length === 0 ? (
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            No obvious weak topics right now. Keep taking quizzes and drills to build a clearer pattern.
+                          </p>
+                        ) : null}
+                      </div>
+
+                      <div className="mt-5 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            startPracticeSession("weak-topics", {
+                              activatePracticeTab: true,
+                            })
+                          }
+                          disabled={practiceCreatingSource !== null}
+                          className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                        >
+                          {practiceCreatingSource === "weak-topics"
+                            ? "Generating..."
+                            : "Practice weak topics"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("questions")}
+                          className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                        >
+                          Take today&apos;s quiz
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
         ) : activeTab === "practice" ? (
           <>
             <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
@@ -1669,13 +2083,15 @@ function DashboardContent() {
                       ) : null}
                     </div>
                     {practiceSession.status === "completed" ? (
-                      <button
-                        type="button"
-                        onClick={() => setPracticeSession(null)}
-                        className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
-                      >
-                        Close session
-                      </button>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPracticeSession(null)}
+                          className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-slate-700 hover:border-slate-400 dark:text-slate-200"
+                        >
+                          Close session
+                        </button>
+                      </div>
                     ) : (
                       <button
                         type="button"
@@ -1823,9 +2239,9 @@ function DashboardContent() {
           <section className="mt-10 rounded-3xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4 shadow-sm sm:p-6">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h2 className="text-xl font-semibold">Review mistakes</h2>
+                <h2 className="text-xl font-semibold">Mistake inbox</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">
-                  Grouped by primary topic so you can work through mistakes without scrolling through every session.
+                  Your recent backlog of missed questions from completed quizzes. Clear items here when you have looked at them once; use Progress trends to spot patterns over time.
                 </p>
               </div>
               <button
@@ -1847,11 +2263,11 @@ function DashboardContent() {
                 <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                   {[
                     {
-                      label: "Topics in queue",
+                      label: "Inbox topics",
                       value: reviewTopicGroups.length,
                     },
                     {
-                      label: "Visible mistakes",
+                      label: "Inbox items",
                       value: totalVisibleReviewItems,
                     },
                     {
@@ -1859,7 +2275,7 @@ function DashboardContent() {
                       value: expandedReviewItemCount,
                     },
                     {
-                      label: "Reviewed this visit",
+                      label: "Cleared this visit",
                       value: reviewedThisVisitCount,
                     },
                   ].map((stat) => (
@@ -1923,10 +2339,10 @@ function DashboardContent() {
                   <div className="rounded-2xl border border-[color:var(--border)] bg-[color:var(--surface-muted)] px-4 py-5 text-sm text-slate-600 dark:text-slate-300">
                     {reviewNextCursor
                       ? "You cleared the currently loaded mistakes. Load older sessions to continue reviewing."
-                      : "You are all caught up. Missed questions from recent quizzes will show up here."}
+                      : "You are all caught up. New misses from recent quizzes will show up here, while Progress trends shows whether those misses are turning into real improvement."}
                     {reviewedThisVisitCount > 0 ? (
                       <p className="mt-2 text-emerald-700 dark:text-emerald-200">
-                        Nice work. You reviewed {reviewedThisVisitCount} mistake
+                        Nice work. You cleared {reviewedThisVisitCount} mistake
                         {reviewedThisVisitCount === 1 ? "" : "s"} this visit.
                       </p>
                     ) : null}
@@ -1991,7 +2407,7 @@ function DashboardContent() {
                                       disabled={isMutating}
                                       className="rounded-full border border-[color:var(--border)] px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-60 dark:text-slate-200"
                                     >
-                                      {isMutating ? "Saving..." : "Mark reviewed"}
+                                      {isMutating ? "Saving..." : "Clear from inbox"}
                                     </button>
                                   </div>
 

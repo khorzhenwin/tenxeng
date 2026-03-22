@@ -5,6 +5,7 @@ import type {
   PracticeSession,
   PracticeSourceType,
   QuizResult,
+  WeakTopicSignal,
 } from "@/lib/quiz/types";
 
 const DEFAULT_TOPICS = [
@@ -20,7 +21,9 @@ const DEFAULT_TOPICS = [
   "Scalability",
 ];
 const PRACTICE_TOPIC_LIMIT = 3;
-const PRACTICE_RESULTS_SCAN_LIMIT = 60;
+export const WEAK_TOPIC_RESULTS_SCAN_LIMIT = 30;
+export const WEAK_TOPIC_SESSION_SCAN_LIMIT = 60;
+const DEFAULT_WEAK_TOPIC_ACCURACY = 1;
 
 function uniqueTopics(topics: string[]) {
   const seen = new Set<string>();
@@ -59,30 +62,59 @@ async function deriveRecentMistakeTopics(uid: string) {
 }
 
 async function deriveWeakTopics(uid: string) {
-  const userRef = adminDb.collection("users").doc(uid);
-  const resultsSnap = await userRef
-    .collection("quizResults")
-    .orderBy("completedAt", "desc")
-    .limit(PRACTICE_RESULTS_SCAN_LIMIT)
-    .get();
+  const signals = await getWeakTopicSignals(uid);
+  return signals.slice(0, PRACTICE_TOPIC_LIMIT).map((entry) => entry.topic);
+}
 
-  if (resultsSnap.empty) {
-    return [];
-  }
+type WeakTopicSignalInput = {
+  quizResults: QuizResult[];
+  quizzesByDateKey: Map<string, DailyQuiz>;
+  practiceSessions: PracticeSession[];
+};
 
-  const results = resultsSnap.docs.map((docSnap) => docSnap.data() as QuizResult);
-  const quizSnaps = await Promise.all(
-    results.map((result) => userRef.collection("dailyQuizzes").doc(result.dateKey).get())
-  );
-  const totals = new Map<string, { correct: number; total: number }>();
+export function buildWeakTopicSignals({
+  quizResults,
+  quizzesByDateKey,
+  practiceSessions,
+}: WeakTopicSignalInput): WeakTopicSignal[] {
+  const totals = new Map<
+    string,
+    { topic: string; correct: number; total: number; latestCompletedAt: string }
+  >();
 
-  results.forEach((result, index) => {
-    const quizSnap = quizSnaps[index];
-    if (!quizSnap.exists) {
+  const updateTotals = (
+    topics: string[],
+    isCorrect: boolean,
+    completedAt: string
+  ) => {
+    uniqueTopics(topics).forEach((topic) => {
+      const key = topic.toLowerCase();
+      const entry = totals.get(key) ?? {
+        topic,
+        correct: 0,
+        total: 0,
+        latestCompletedAt: completedAt,
+      };
+      entry.total += 1;
+      if (isCorrect) {
+        entry.correct += 1;
+      }
+      if (completedAt > entry.latestCompletedAt) {
+        entry.latestCompletedAt = completedAt;
+      }
+      if (entry.topic === entry.topic.toLowerCase() && topic !== topic.toLowerCase()) {
+        entry.topic = topic;
+      }
+      totals.set(key, entry);
+    });
+  };
+
+  quizResults.forEach((result) => {
+    const quiz = quizzesByDateKey.get(result.dateKey);
+    if (!quiz) {
       return;
     }
 
-    const quiz = quizSnap.data() as DailyQuiz;
     quiz.questions.forEach((question) => {
       const topics = question.topics?.length ? question.topics : [];
       if (topics.length === 0) {
@@ -91,23 +123,36 @@ async function deriveWeakTopics(uid: string) {
 
       const isCorrect =
         result.selectedAnswers[question.id] === question.answerIndex;
-      topics.forEach((topic) => {
-        const entry = totals.get(topic) ?? { correct: 0, total: 0 };
-        entry.total += 1;
-        if (isCorrect) {
-          entry.correct += 1;
-        }
-        totals.set(topic, entry);
-      });
+      updateTotals(topics, isCorrect, result.completedAt);
     });
   });
 
-  return Array.from(totals.entries())
-    .map(([topic, entry]) => ({
-      topic,
-      accuracy: entry.total > 0 ? entry.correct / entry.total : 1,
+  practiceSessions.forEach((session) => {
+    if (session.status !== "completed" || !session.completedAt) {
+      return;
+    }
+    const completedAt = session.completedAt;
+
+    session.questions.forEach((question) => {
+      const topics = question.topics?.length ? question.topics : [];
+      if (topics.length === 0) {
+        return;
+      }
+
+      const isCorrect =
+        session.selectedAnswers[question.id] === question.answerIndex;
+      updateTotals(topics, isCorrect, completedAt);
+    });
+  });
+
+  return Array.from(totals.values())
+    .map((entry) => ({
+      topic: entry.topic,
+      accuracy:
+        entry.total > 0 ? entry.correct / entry.total : DEFAULT_WEAK_TOPIC_ACCURACY,
       total: entry.total,
       wrong: entry.total - entry.correct,
+      latestCompletedAt: entry.latestCompletedAt,
     }))
     .sort((left, right) => {
       if (left.accuracy !== right.accuracy) {
@@ -117,9 +162,49 @@ async function deriveWeakTopics(uid: string) {
         return right.wrong - left.wrong;
       }
       return right.total - left.total;
-    })
-    .slice(0, PRACTICE_TOPIC_LIMIT)
-    .map((entry) => entry.topic);
+    });
+}
+
+export async function getWeakTopicSignals(uid: string) {
+  const userRef = adminDb.collection("users").doc(uid);
+  const [resultsSnap, practiceSnap] = await Promise.all([
+    userRef
+      .collection("quizResults")
+      .orderBy("completedAt", "desc")
+      .limit(WEAK_TOPIC_RESULTS_SCAN_LIMIT)
+      .get(),
+    userRef
+      .collection("practiceSessions")
+      .orderBy("createdAt", "desc")
+      .limit(WEAK_TOPIC_SESSION_SCAN_LIMIT)
+      .get(),
+  ]);
+
+  const quizResults = resultsSnap.docs.map((docSnap) => docSnap.data() as QuizResult);
+  const practiceSessions = practiceSnap.docs.map(
+    (docSnap) => docSnap.data() as PracticeSession
+  );
+  const quizSnaps = await Promise.all(
+    quizResults.map((result) =>
+      userRef.collection("dailyQuizzes").doc(result.dateKey).get()
+    )
+  );
+  const quizzesByDateKey = new Map<string, DailyQuiz>();
+  quizSnaps.forEach((quizSnap, index) => {
+    if (!quizSnap.exists) {
+      return;
+    }
+    quizzesByDateKey.set(
+      quizResults[index].dateKey,
+      quizSnap.data() as DailyQuiz
+    );
+  });
+
+  return buildWeakTopicSignals({
+    quizResults,
+    quizzesByDateKey,
+    practiceSessions,
+  });
 }
 
 export async function derivePracticeTopics(
